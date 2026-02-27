@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+frontend/dist/
+backend/**/bin/
+backend/**/obj/
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.user
+
+# Environment / secrets
+.env
+appsettings.Development.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
