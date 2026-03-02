@@ -13,14 +13,14 @@ public static class PatternEndpoints
             try
             {
                 var imageBytes = Convert.FromBase64String(req.ImageBase64);
-                var result = quant.Convert(imageBytes, req.TargetWidth, req.TargetHeight, req.ColorCount, req.Dithering);
+                var result = quant.Convert(imageBytes, req.TargetWidth, req.TargetHeight, req.ColorCount, req.Dithering, req.DitherMode, req.AllowedDmcNumbers);
                 return Results.Ok(result);
             }
             catch (Exception ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
             }
-        });
+        }).RequireAuthorization();
 
         // Return the DMC color database
         app.MapGet("/api/colors/dmc", () =>
@@ -34,6 +34,6 @@ public static class PatternEndpoints
                 b = c.B,
                 hex = c.Hex,
             }));
-        });
+        }).RequireAuthorization();
     }
 }

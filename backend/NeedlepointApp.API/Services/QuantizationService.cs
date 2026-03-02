@@ -11,15 +11,30 @@ namespace NeedlepointApp.API.Services;
 ///   1. Decode image
 ///   2. Resize to target stitch dimensions
 ///   3. K-means clustering to reduce to N colors
-///   4. Floyd-Steinberg dithering (optional)
-///   5. Match each cluster to nearest DMC color
+///   4. Dithering (Floyd-Steinberg, ordered Bayer 4×4, or none)
+///   5. Match each cluster to nearest DMC color (Delta-E CIE2000)
 ///   6. Build grid
 /// </summary>
 public class QuantizationService
 {
     private const int KMeansIterations = 20;
 
-    public ConvertImageResponse Convert(byte[] imageBytes, int targetWidth, int targetHeight, int colorCount, bool dithering)
+    // Bayer 4×4 ordered dithering matrix
+    private static readonly int[,] Bayer4x4 = {
+        {  0,  8,  2, 10 },
+        { 12,  4, 14,  6 },
+        {  3, 11,  1,  9 },
+        { 15,  7, 13,  5 },
+    };
+
+    public ConvertImageResponse Convert(
+        byte[] imageBytes,
+        int targetWidth,
+        int targetHeight,
+        int colorCount,
+        bool dithering,
+        string ditherMode = "floyd-steinberg",
+        string[]? allowedDmcNumbers = null)
     {
         using var img = Image.Load<Rgb24>(imageBytes);
         img.Mutate(x => x.Resize(targetWidth, targetHeight));
@@ -31,15 +46,47 @@ public class QuantizationService
         // K-means clustering
         var palette = KMeans(pixels, colorCount);
 
-        // Map each pixel to nearest palette entry (with optional dithering)
+        // Map each pixel to nearest palette entry using selected dithering method
         int[] assignments;
-        if (dithering)
-            assignments = FloydSteinbergDither(pixels, palette, targetWidth, targetHeight);
-        else
-            assignments = pixels.Select(p => FindNearest(palette, p)).ToArray();
+        var effectiveMode = ditherMode ?? (dithering ? "floyd-steinberg" : "none");
+        switch (effectiveMode)
+        {
+            case "floyd-steinberg":
+                assignments = FloydSteinbergDither(pixels, palette, targetWidth, targetHeight);
+                break;
+            case "ordered":
+                assignments = OrderedDither(pixels, palette, targetWidth, targetHeight);
+                break;
+            default: // "none"
+                assignments = pixels.Select(p => FindNearest(palette, p)).ToArray();
+                break;
+        }
 
-        // Match palette entries to DMC colors
-        var dmcPalette = palette.Select(p => DmcDatabase.FindNearest(p.R, p.G, p.B)).ToArray();
+        // Match palette entries to DMC colors (optionally constrained)
+        DmcColor[] dmcPalette;
+        double[] dmcDeltaEs;
+        if (allowedDmcNumbers is { Length: > 0 })
+        {
+            var allowed = DmcDatabase.Colors.Where(c => allowedDmcNumbers.Contains(c.Number)).ToArray();
+            if (allowed.Length > 0)
+            {
+                var matches = palette.Select(p => DmcDatabase.FindNearestWithDeltaE(p.R, p.G, p.B, allowed)).ToArray();
+                dmcPalette = matches.Select(m => m.Color).ToArray();
+                dmcDeltaEs = matches.Select(m => m.DeltaE).ToArray();
+            }
+            else
+            {
+                var matches = palette.Select(p => DmcDatabase.FindNearestWithDeltaE(p.R, p.G, p.B)).ToArray();
+                dmcPalette = matches.Select(m => m.Color).ToArray();
+                dmcDeltaEs = matches.Select(m => m.DeltaE).ToArray();
+            }
+        }
+        else
+        {
+            var matches = palette.Select(p => DmcDatabase.FindNearestWithDeltaE(p.R, p.G, p.B)).ToArray();
+            dmcPalette = matches.Select(m => m.Color).ToArray();
+            dmcDeltaEs = matches.Select(m => m.DeltaE).ToArray();
+        }
 
         // Build grid
         var cells = new Dictionary<string, StitchCell>();
@@ -57,11 +104,21 @@ public class QuantizationService
             }
         }
 
+        // Track deltaE per DMC number (take worst/max for each unique number)
+        var deltaEByDmc = new Dictionary<string, double>();
+        for (int i = 0; i < dmcPalette.Length; i++)
+        {
+            var num = dmcPalette[i].Number;
+            if (!deltaEByDmc.ContainsKey(num) || dmcDeltaEs[i] > deltaEByDmc[num])
+                deltaEByDmc[num] = dmcDeltaEs[i];
+        }
+
         var usedColors = stitchCounts
             .Select(kv =>
             {
                 var dmc = DmcDatabase.Colors.First(c => c.Number == kv.Key);
-                return new UsedColor(dmc.Number, dmc.Name, dmc.Hex, kv.Value);
+                var de = deltaEByDmc.GetValueOrDefault(kv.Key, 0);
+                return new UsedColor(dmc.Number, dmc.Name, dmc.Hex, kv.Value, Math.Round(de, 2));
             })
             .OrderByDescending(c => c.StitchCount)
             .ToList();
@@ -163,6 +220,47 @@ public class QuantizationService
                 AddErr(idx + width - 1, 3f / 16f);
                 AddErr(idx + width, 5f / 16f);
                 AddErr(idx + width + 1, 1f / 16f);
+            }
+        }
+
+        return result;
+    }
+
+    private static int[] OrderedDither(Rgb24[] pixels, Rgb24[] palette, int width, int height)
+    {
+        // Find max inter-centroid distance for scaling
+        double maxDist = 0;
+        for (int i = 0; i < palette.Length; i++)
+        {
+            for (int j = i + 1; j < palette.Length; j++)
+            {
+                double dr = palette[i].R - palette[j].R;
+                double dg = palette[i].G - palette[j].G;
+                double db = palette[i].B - palette[j].B;
+                maxDist = Math.Max(maxDist, Math.Sqrt(dr * dr + dg * dg + db * db));
+            }
+        }
+        double spread = Math.Max(16, maxDist * 0.25);
+
+        var result = new int[pixels.Length];
+
+        for (int row = 0; row < height; row++)
+        {
+            for (int col = 0; col < width; col++)
+            {
+                int idx = row * width + col;
+                var p = pixels[idx];
+
+                // Bayer threshold normalized to [-0.5, +0.5]
+                double threshold = (Bayer4x4[row % 4, col % 4] / 16.0) - 0.5;
+
+                var adjusted = new Rgb24(
+                    (byte)Math.Clamp(Math.Round(p.R + threshold * spread), 0, 255),
+                    (byte)Math.Clamp(Math.Round(p.G + threshold * spread), 0, 255),
+                    (byte)Math.Clamp(Math.Round(p.B + threshold * spread), 0, 255)
+                );
+
+                result[idx] = FindNearest(palette, adjusted);
             }
         }
 

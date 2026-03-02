@@ -25,7 +25,15 @@ public static class AIEndpoints
 
             try
             {
-                await foreach (var chunk in ai.StreamChatAsync(req.Message, req.History))
+                await foreach (var chunk in ai.StreamChatAsync(
+                    req.Message,
+                    req.History,
+                    req.CanvasWidth,
+                    req.CanvasHeight,
+                    req.ColorCount,
+                    req.Dithering,
+                    meshCount: 18,
+                    req.PaletteConstraint))
                 {
                     var json = JsonSerializer.Serialize(new
                     {
@@ -45,6 +53,6 @@ public static class AIEndpoints
             }
 
             await Send("[DONE]");
-        });
+        }).RequireAuthorization();
     }
 }

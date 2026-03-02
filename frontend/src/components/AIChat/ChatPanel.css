@@ -209,12 +209,122 @@
   50% { opacity: 0; }
 }
 
+/* Pattern preview card */
+.pattern-preview {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pattern-preview-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pattern-preview-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+}
+
+.preview-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+
+.preview-more {
+  font-size: 10px;
+  color: #64748b;
+  margin-left: 4px;
+}
+
+.pattern-preview-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.preview-btn {
+  flex: 1;
+  padding: 7px 0;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.preview-btn-primary {
+  background: linear-gradient(135deg, #7c3aed, #3b82f6);
+  color: white;
+}
+
+.preview-btn-primary:hover {
+  opacity: 0.9;
+}
+
+.preview-btn-secondary {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.preview-btn-secondary:hover {
+  background: #475569;
+}
+
+.preview-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Style presets */
+.style-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 12px;
+  border-top: 1px solid #1e293b;
+}
+
+.style-preset-btn {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  color: #94a3b8;
+  padding: 3px 10px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.style-preset-btn:hover {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+/* Input area */
 .chat-input-area {
   display: flex;
-  gap: 8px;
-  padding: 12px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 12px;
   border-top: 1px solid #1e293b;
   background: #0f172a;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
 }
 
 .chat-input {
@@ -263,4 +373,18 @@
 .send-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.palette-constraint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #64748b;
+  cursor: pointer;
+  padding-left: 2px;
+}
+
+.palette-constraint input {
+  accent-color: #7c3aed;
 }

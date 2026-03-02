@@ -20,7 +20,7 @@ public class AIService
     private readonly string _anthropicKey;
     private readonly string _openaiKey;
 
-    private const string SystemPrompt = """
+    private const string BaseSystemPrompt = """
         You are an expert needlepoint designer and teacher named Stitch, integrated into NeedlePoint Studio.
 
         Your expertise covers:
@@ -31,18 +31,40 @@ public class AIService
         - Converting images and ideas into grid-based needlepoint patterns
         - Beginner guidance and advanced technique advice
 
-        When the user describes a design they want to create, respond with a JSON block in this format:
+        When the user describes a design they want to create, respond with a brief description of what you'll make, then a JSON block in this format:
         GENERATE_PATTERN: {"imagePrompt": "your optimized DALL-E prompt here"}
 
-        For pattern generation prompts, craft them with:
-        - Bold, clear outlines suitable for a grid-based pattern
-        - Flat areas of color (not photorealistic)
-        - Limited color palette (suitable for needlepoint)
-        - Simple, graphic, illustrative style
+        When creating DALL-E prompts for needlepoint patterns:
+        - Always include: "flat graphic illustration, bold outlines, limited color palette"
+        - Always include: "no gradients, no photorealism, solid color regions"
+        - Always include: "suitable for grid-based needlepoint pattern"
+        - For small canvases (<100 stitches wide): "very simple design, large shapes, minimal detail"
+        - For large canvases (>200 stitches wide): "can include fine detail and smaller elements"
         - Good contrast between elements
+
+        When the user asks to refine or modify a previous design ("make it more blue", "add a border", etc.),
+        create a new GENERATE_PATTERN with a modified prompt that incorporates their feedback.
 
         When the user asks questions about needlepoint (not requesting a design), just answer conversationally.
         """;
+
+    private static string BuildSystemPrompt(int canvasWidth, int canvasHeight, int meshCount, int colorCount, string[]? paletteConstraint)
+    {
+        var sb = new StringBuilder(BaseSystemPrompt);
+        var physW = (double)canvasWidth / meshCount;
+        var physH = (double)canvasHeight / meshCount;
+        sb.AppendLine();
+        sb.AppendLine($"The user's canvas is {canvasWidth}x{canvasHeight} stitches ({meshCount}-count mesh).");
+        sb.AppendLine($"Physical size: {physW:F1}\" x {physH:F1}\".");
+        sb.AppendLine($"Target color count: {colorCount} DMC colors.");
+        sb.AppendLine($"Include \"{colorCount} distinct colors maximum\" in DALL-E prompts.");
+        if (paletteConstraint is { Length: > 0 })
+        {
+            sb.AppendLine($"IMPORTANT: The user wants to use only these DMC colors: {string.Join(", ", paletteConstraint)}");
+            sb.AppendLine("Describe the design using colors close to these thread colors.");
+        }
+        return sb.ToString();
+    }
 
     public AIService(IConfiguration config, QuantizationService quantization, ILogger<AIService> logger)
     {
@@ -63,7 +85,9 @@ public class AIService
         int targetWidth = 80,
         int targetHeight = 60,
         int colorCount = 25,
-        bool dithering = true)
+        bool dithering = true,
+        int meshCount = 18,
+        string[]? paletteConstraint = null)
     {
         // Build messages array for Claude
         var messages = new JsonArray();
@@ -81,11 +105,13 @@ public class AIService
             ["content"] = userMessage,
         });
 
+        var systemPrompt = BuildSystemPrompt(targetWidth, targetHeight, meshCount, colorCount, paletteConstraint);
+
         var requestBody = new JsonObject
         {
             ["model"] = "claude-sonnet-4-20250514",
             ["max_tokens"] = 1024,
-            ["system"] = SystemPrompt,
+            ["system"] = systemPrompt,
             ["stream"] = true,
             ["messages"] = messages,
         };
@@ -140,7 +166,7 @@ public class AIService
         // Pattern conversion
         yield return new AiStreamChunk("status", "Converting to needlepoint pattern...", "converting", "Converting to needlepoint...");
 
-        var result = ConvertPatternSafe(imageBytes, targetWidth, targetHeight, colorCount, dithering);
+        var result = ConvertPatternSafe(imageBytes, targetWidth, targetHeight, colorCount, dithering, paletteConstraint);
         if (result == null)
         {
             yield return new AiStreamChunk("text", "\n\nSorry, pattern conversion failed. Please try again.", null, null);
@@ -195,9 +221,9 @@ public class AIService
         catch (Exception ex) { _logger.LogError(ex, "DALL-E generation failed"); return null; }
     }
 
-    private ConvertImageResponse? ConvertPatternSafe(byte[] imageBytes, int w, int h, int colors, bool dither)
+    private ConvertImageResponse? ConvertPatternSafe(byte[] imageBytes, int w, int h, int colors, bool dither, string[]? paletteConstraint = null)
     {
-        try { return _quantization.Convert(imageBytes, w, h, colors, dither); }
+        try { return _quantization.Convert(imageBytes, w, h, colors, dither, allowedDmcNumbers: paletteConstraint); }
         catch (Exception ex) { _logger.LogError(ex, "Pattern conversion failed"); return null; }
     }
 

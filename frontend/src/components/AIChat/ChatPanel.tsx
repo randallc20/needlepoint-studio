@@ -1,6 +1,24 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChatStore } from '../../store/chatStore';
+import { useCanvasStore } from '../../store/canvasStore';
+import type { StitchCell } from '../../types';
 import './ChatPanel.css';
+
+interface PendingPattern {
+  cells: Record<string, StitchCell>;
+  width: number;
+  height: number;
+  colors: { number: string; name: string; hex: string; r: number; g: number; b: number }[];
+}
+
+const STYLE_PRESETS = [
+  'Victorian',
+  'Modern',
+  'Geometric',
+  'Floral',
+  'Abstract',
+  'Holiday',
+];
 
 export function ChatPanel() {
   const messages = useChatStore(s => s.messages);
@@ -14,6 +32,9 @@ export function ChatPanel() {
 
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [usePaletteOnly, setUsePaletteOnly] = useState(false);
+  const [pendingPattern, setPendingPattern] = useState<PendingPattern | null>(null);
+  const [lastPrompt, setLastPrompt] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -21,21 +42,39 @@ export function ChatPanel() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const sendMessage = async () => {
-    const text = input.trim();
+  const sendMessage = async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if (!text || isLoading) return;
 
-    setInput('');
+    if (!overrideText) setInput('');
+    setLastPrompt(text);
+    setPendingPattern(null);
     addMessage({ role: 'user', content: text });
     setIsLoading(true);
 
     const assistantId = addMessage({ role: 'assistant', content: '', isStreaming: true });
 
+    // Gather canvas context
+    const canvasState = useCanvasStore.getState();
+    const { config, palette } = canvasState;
+    const paletteConstraint = usePaletteOnly && palette.length > 0
+      ? palette.map(c => c.number)
+      : undefined;
+
     try {
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history: messages.map(m => ({ role: m.role, content: m.content })) }),
+        credentials: 'include',
+        body: JSON.stringify({
+          message: text,
+          history: messages.map(m => ({ role: m.role, content: m.content })),
+          canvasWidth: config.width,
+          canvasHeight: config.height,
+          colorCount: Math.max(palette.length, 25),
+          dithering: true,
+          paletteConstraint: paletteConstraint ?? null,
+        }),
       });
 
       if (!response.ok) throw new Error('API error');
@@ -61,9 +100,39 @@ export function ChatPanel() {
                 appendToMessage(assistantId, parsed.content);
               } else if (parsed.type === 'status') {
                 setGenerationStatus({ step: parsed.step, message: parsed.message });
-              } else if (parsed.type === 'pattern_ready') {
-                setGenerationStatus({ step: 'done', message: 'Pattern loaded onto canvas!' });
-                // TODO: signal canvas to load pattern
+              } else if (parsed.type === 'pattern_ready' && parsed.pattern) {
+                setGenerationStatus({ step: 'done', message: 'Pattern ready! Click "Load to Canvas" to apply.' });
+                // Parse the pattern but don't auto-load — let user choose
+                const patternData = parsed.pattern;
+                const grid = patternData.Pattern ?? patternData.pattern;
+                if (grid) {
+                  const cells: Record<string, StitchCell> = {};
+                  const gridCells = grid.Cells ?? grid.cells ?? {};
+                  for (const [key, cell] of Object.entries(gridCells)) {
+                    const c = cell as { Color?: string; color?: string; DmcNumber?: string; dmcNumber?: string; StitchType?: string; stitchType?: string };
+                    cells[key] = {
+                      color: c.Color ?? c.color ?? null,
+                      dmcNumber: c.DmcNumber ?? c.dmcNumber ?? null,
+                      stitchType: (c.StitchType ?? c.stitchType ?? 'tent') as StitchCell['stitchType'],
+                    };
+                  }
+                  const w = grid.Width ?? grid.width;
+                  const h = grid.Height ?? grid.height;
+
+                  // Parse colors
+                  const rawColors = patternData.Colors ?? patternData.colors ?? [];
+                  const parsedColors = rawColors.map((uc: { DmcNumber?: string; dmcNumber?: string; Name?: string; name?: string; Hex?: string; hex?: string }) => {
+                    const dmcNum = uc.DmcNumber ?? uc.dmcNumber ?? '';
+                    const name = uc.Name ?? uc.name ?? '';
+                    const hex = uc.Hex ?? uc.hex ?? '';
+                    const r = parseInt(hex.slice(1, 3), 16) || 0;
+                    const g = parseInt(hex.slice(3, 5), 16) || 0;
+                    const b = parseInt(hex.slice(5, 7), 16) || 0;
+                    return { number: dmcNum, name, hex, r, g, b };
+                  });
+
+                  setPendingPattern({ cells, width: w, height: h, colors: parsedColors });
+                }
               }
             } catch {}
           }
@@ -78,11 +147,41 @@ export function ChatPanel() {
     }
   };
 
+  const loadPatternToCanvas = () => {
+    if (!pendingPattern) return;
+    const canvasStore = useCanvasStore.getState();
+    if (pendingPattern.width && pendingPattern.height) {
+      canvasStore.setConfig({ width: pendingPattern.width, height: pendingPattern.height });
+    }
+    canvasStore.loadCells(pendingPattern.cells);
+    for (const c of pendingPattern.colors) {
+      if (c.number && c.hex) {
+        canvasStore.addToPalette(c);
+      }
+    }
+    setPendingPattern(null);
+    setGenerationStatus({ step: 'done', message: 'Pattern loaded onto canvas!' });
+  };
+
+  const regeneratePattern = () => {
+    if (!lastPrompt) return;
+    sendMessage(lastPrompt + ' (generate a different variation)');
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
+  };
+
+  const handleStylePreset = (style: string) => {
+    setInput(prev => {
+      const trimmed = prev.trim();
+      if (trimmed) return `${style} style: ${trimmed}`;
+      return `Create a ${style.toLowerCase()} needlepoint design`;
+    });
+    inputRef.current?.focus();
   };
 
   const STATUS_ICONS: Record<string, string> = {
@@ -162,27 +261,85 @@ export function ChatPanel() {
                 </div>
               </div>
             ))}
+
+            {/* Pattern preview with load/regenerate buttons */}
+            {pendingPattern && (
+              <div className="pattern-preview">
+                <div className="pattern-preview-header">
+                  Pattern Ready — {pendingPattern.width}x{pendingPattern.height}, {pendingPattern.colors.length} colors
+                </div>
+                <div className="pattern-preview-swatches">
+                  {pendingPattern.colors.slice(0, 12).map(c => (
+                    <div
+                      key={c.number}
+                      className="preview-swatch"
+                      style={{ background: c.hex }}
+                      title={`DMC ${c.number} - ${c.name}`}
+                    />
+                  ))}
+                  {pendingPattern.colors.length > 12 && (
+                    <span className="preview-more">+{pendingPattern.colors.length - 12}</span>
+                  )}
+                </div>
+                <div className="pattern-preview-actions">
+                  <button className="preview-btn preview-btn-primary" onClick={loadPatternToCanvas}>
+                    Load to Canvas
+                  </button>
+                  <button
+                    className="preview-btn preview-btn-secondary"
+                    onClick={regeneratePattern}
+                    disabled={isLoading}
+                  >
+                    Regenerate
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div ref={messagesEndRef} />
           </div>
 
+          {/* Style presets */}
+          <div className="style-presets">
+            {STYLE_PRESETS.map(style => (
+              <button
+                key={style}
+                className="style-preset-btn"
+                onClick={() => handleStylePreset(style)}
+              >
+                {style}
+              </button>
+            ))}
+          </div>
+
           <div className="chat-input-area">
-            <textarea
-              ref={inputRef}
-              className="chat-input"
-              placeholder="Describe a needlepoint design or ask a question..."
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={2}
-              disabled={isLoading}
-            />
-            <button
-              className="send-btn"
-              onClick={sendMessage}
-              disabled={isLoading || !input.trim()}
-            >
-              {isLoading ? '⏳' : '➤'}
-            </button>
+            <div className="chat-input-row">
+              <textarea
+                ref={inputRef}
+                className="chat-input"
+                placeholder="Describe a needlepoint design or ask a question..."
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={2}
+                disabled={isLoading}
+              />
+              <button
+                className="send-btn"
+                onClick={() => sendMessage()}
+                disabled={isLoading || !input.trim()}
+              >
+                {isLoading ? '⏳' : '➤'}
+              </button>
+            </div>
+            <label className="palette-constraint">
+              <input
+                type="checkbox"
+                checked={usePaletteOnly}
+                onChange={e => setUsePaletteOnly(e.target.checked)}
+              />
+              Use only my palette colors
+            </label>
           </div>
         </div>
       )}

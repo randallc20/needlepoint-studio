@@ -1,8 +1,10 @@
 import type { DmcColor } from '../types';
+import { rgbToLab, findNearestByDeltaE, deltaE2000 } from '../utils/colorScience';
+import type { Lab } from '../utils/colorScience';
 
 // Full DMC 454-color database with RGB values
 // Source: DMC official color chart
-export const DMC_COLORS: DmcColor[] = [
+const DMC_COLORS_RAW: Omit<DmcColor, 'lab'>[] = [
   { number: 'White', name: 'White', r: 255, g: 255, b: 255, hex: '#ffffff' },
   { number: 'Ecru', name: 'Ecru', r: 240, g: 234, b: 218, hex: '#f0eada' },
   { number: 'B5200', name: 'Snow White', r: 255, g: 255, b: 255, hex: '#ffffff' },
@@ -451,20 +453,64 @@ export const DMC_COLORS: DmcColor[] = [
   { number: '3866', name: 'Mocha Brown Ult Lt', r: 247, g: 242, b: 233, hex: '#f7f2e9' },
 ];
 
-export function findNearestDmcColor(r: number, g: number, b: number): DmcColor {
-  let nearest = DMC_COLORS[0];
-  let minDist = Infinity;
+// Pre-compute CIELAB values at module load time for all DMC colors.
+// This makes Delta-E lookups fast (no conversion during search).
+export const DMC_COLORS: DmcColor[] = DMC_COLORS_RAW.map(c => ({
+  ...c,
+  lab: rgbToLab(c.r, c.g, c.b),
+}));
 
-  for (const color of DMC_COLORS) {
-    const dr = color.r - r;
-    const dg = color.g - g;
-    const db = color.b - b;
-    const dist = dr * dr + dg * dg + db * db;
-    if (dist < minDist) {
-      minDist = dist;
-      nearest = color;
-    }
+// Pre-extracted LAB array for fast nearest-color search (avoids repeated property access)
+const DMC_LABS: Lab[] = DMC_COLORS.map(c => c.lab!);
+
+/**
+ * Find the nearest DMC color using Delta-E CIE2000 (perceptually accurate).
+ *
+ * @param r - Red (0–255)
+ * @param g - Green (0–255)
+ * @param b - Blue (0–255)
+ * @param restrictTo - Optional subset of DMC numbers to search within
+ * @returns The nearest DMC color and the Delta-E distance
+ */
+export function findNearestDmcColor(
+  r: number,
+  g: number,
+  b: number,
+  restrictTo?: string[]
+): { color: DmcColor; deltaE: number } {
+  const targetLab = rgbToLab(r, g, b);
+
+  if (restrictTo && restrictTo.length > 0) {
+    // Search within restricted palette
+    const restricted = DMC_COLORS.filter(c => restrictTo.includes(c.number));
+    const restrictedLabs = restricted.map(c => c.lab!);
+    const match = findNearestByDeltaE(targetLab, restrictedLabs);
+    return { color: restricted[match.index], deltaE: match.deltaE };
   }
 
-  return nearest;
+  const match = findNearestByDeltaE(targetLab, DMC_LABS);
+  return { color: DMC_COLORS[match.index], deltaE: match.deltaE };
+}
+
+/**
+ * Find the N nearest DMC colors (for showing alternatives).
+ */
+export function findNearestDmcColors(
+  r: number,
+  g: number,
+  b: number,
+  count: number = 5
+): Array<{ color: DmcColor; deltaE: number }> {
+  const targetLab = rgbToLab(r, g, b);
+  const results: Array<{ color: DmcColor; deltaE: number }> = [];
+
+  for (let i = 0; i < DMC_COLORS.length; i++) {
+    results.push({
+      color: DMC_COLORS[i],
+      deltaE: deltaE2000(targetLab, DMC_LABS[i]),
+    });
+  }
+
+  results.sort((a, b) => a.deltaE - b.deltaE);
+  return results.slice(0, count);
 }

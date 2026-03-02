@@ -1,15 +1,45 @@
 .settings-trigger {
-  background: transparent;
-  border: none;
-  color: #64748b;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  color: #94a3b8;
   font-size: 12px;
   cursor: pointer;
-  padding: 0 8px;
+  padding: 4px 12px;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: border-color 0.15s, background 0.15s;
 }
 
 .settings-trigger:hover {
-  color: #cbd5e1;
+  background: #334155;
+  border-color: #475569;
+}
+
+.settings-dimensions {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f1f5f9;
+  letter-spacing: 0.02em;
+}
+
+.settings-detail {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.settings-separator {
+  color: #334155;
+  font-size: 11px;
+}
+
+.settings-gear {
+  font-size: 13px;
+  color: #64748b;
+  margin-left: 2px;
 }
 
 .settings-overlay {
@@ -115,4 +145,42 @@
 
 .settings-apply:hover {
   background: #2563eb;
+}
+
+.settings-mode-toggle {
+  display: flex;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #334155;
+}
+
+.mode-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  background: #0f172a;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mode-btn:hover {
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+.mode-btn.active {
+  background: #3b82f6;
+  color: white;
+}
+
+.settings-preview div {
+  margin-bottom: 2px;
+}
+
+.settings-preview div:last-child {
+  margin-bottom: 0;
 }

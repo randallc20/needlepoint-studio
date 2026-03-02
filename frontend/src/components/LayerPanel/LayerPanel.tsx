@@ -83,7 +83,7 @@ export function LayerPanel() {
               )}
 
               <div className="layer-cell-count">
-                {layer.cells.size} sts
+                {Object.keys(layer.cells).length} sts
               </div>
 
               {layers.length > 1 && (

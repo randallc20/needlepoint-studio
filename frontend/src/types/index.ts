@@ -1,4 +1,5 @@
 export type Tool =
+  | 'pointer'
   | 'pencil'
   | 'fill'
   | 'eyedropper'
@@ -24,6 +25,7 @@ export interface DmcColor {
   g: number;
   b: number;
   hex: string;
+  lab?: { l: number; a: number; b: number };
 }
 
 export interface StitchCell {
@@ -37,7 +39,7 @@ export interface Layer {
   name: string;
   visible: boolean;
   opacity: number;
-  cells: Map<string, StitchCell>; // key: "row,col"
+  cells: Record<string, StitchCell>; // key: "row,col"
 }
 
 export interface CanvasConfig {
@@ -81,4 +83,44 @@ export interface ColorCount {
   squareInches: number;
   yardage: number;
   skeins: number;
+}
+
+export interface CellRect {
+  minRow: number;
+  minCol: number;
+  maxRow: number;
+  maxCol: number;
+}
+
+export interface CellGroup {
+  id: string;
+  name: string;
+  layerId: string;
+  cellKeys: Set<string>;
+}
+
+export interface ClipboardData {
+  cells: Record<string, StitchCell>;
+  width: number;
+  height: number;
+}
+
+export interface SavedStamp {
+  id: string;
+  name: string;
+  cells: Record<string, StitchCell>;
+  width: number;
+  height: number;
+  createdAt: string;
+  thumbnail: string;
+}
+
+export interface CanvasPrintConfig {
+  meshCount: number;
+  scaleFactor: number;        // 10 | 15 | 20 | 25 | 30
+  margins: { top: number; bottom: number; left: number; right: number }; // inches
+  format: 'tiff' | 'png';
+  colorProfile: 'srgb' | 'adobe-rgb' | 'custom';
+  customIccProfile?: ArrayBuffer;
+  embedIccProfile: boolean;
 }

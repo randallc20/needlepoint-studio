@@ -1,0 +1,304 @@
+.stamp-panel {
+  width: 180px;
+  min-width: 180px;
+  background: #0f172a;
+  border-left: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
+}
+
+.stamp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 10px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.stamp-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+
+.stamp-count {
+  font-size: 10px;
+  color: #475569;
+  margin-left: 4px;
+}
+
+.stamp-save-btn {
+  width: 100%;
+  padding: 7px 10px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  margin: 8px 8px 4px;
+  width: calc(100% - 16px);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.stamp-save-btn:hover:not(:disabled) {
+  background: #334155;
+  border-color: #475569;
+  color: #f1f5f9;
+}
+
+.stamp-save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.stamp-save-btn.has-selection {
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+
+.stamp-save-btn.has-selection:hover {
+  background: #1e3a5f;
+}
+
+.stamp-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stamp-empty {
+  padding: 16px 10px;
+  font-size: 11px;
+  color: #475569;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.stamp-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.stamp-item:hover {
+  background: #1e293b;
+}
+
+.stamp-thumb {
+  width: 32px;
+  height: 32px;
+  border-radius: 3px;
+  border: 1px solid #334155;
+  background: #ffffff;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.stamp-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.stamp-name {
+  font-size: 12px;
+  color: #cbd5e1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stamp-meta {
+  font-size: 10px;
+  color: #475569;
+}
+
+.stamp-delete {
+  background: transparent;
+  border: none;
+  color: #475569;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  flex-shrink: 0;
+}
+
+.stamp-item:hover .stamp-delete {
+  opacity: 1;
+}
+
+.stamp-delete:hover {
+  color: #ef4444;
+}
+
+.stamp-upload-btn {
+  width: calc(100% - 16px);
+  padding: 7px 10px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  margin: 4px 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.stamp-upload-btn:hover {
+  background: #334155;
+  border-color: #475569;
+  color: #f1f5f9;
+}
+
+.stamp-upload-form {
+  margin: 4px 8px;
+  padding: 8px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+}
+
+.stamp-dropzone {
+  padding: 16px 8px;
+  border: 1px dashed #475569;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s;
+}
+
+.stamp-dropzone:hover {
+  border-color: #3b82f6;
+}
+
+.stamp-dropzone-text {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.stamp-upload-preview {
+  width: 100%;
+  max-height: 80px;
+  object-fit: contain;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  margin-bottom: 6px;
+}
+
+.stamp-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.stamp-upload-row label {
+  font-size: 11px;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.stamp-upload-row input[type="number"] {
+  width: 50px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #f1f5f9;
+  font-size: 11px;
+  padding: 3px 4px;
+  outline: none;
+}
+
+.stamp-upload-row input[type="number"]:focus {
+  border-color: #3b82f6;
+}
+
+.stamp-upload-row input[type="checkbox"] {
+  margin-right: 4px;
+}
+
+.stamp-upload-select {
+  flex: 1;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #f1f5f9;
+  font-size: 11px;
+  padding: 3px 4px;
+  outline: none;
+}
+
+.stamp-upload-select:focus {
+  border-color: #3b82f6;
+}
+
+.stamp-upload-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.stamp-upload-cancel {
+  flex: 1;
+  padding: 5px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.stamp-upload-cancel:hover {
+  background: #1e293b;
+  color: #f1f5f9;
+}
+
+.stamp-upload-convert {
+  flex: 1;
+  padding: 5px;
+  background: #1e3a5f;
+  border: 1px solid #3b82f6;
+  border-radius: 4px;
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.stamp-upload-convert:hover:not(:disabled) {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.stamp-upload-convert:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stamp-toast {
+  padding: 6px 10px;
+  margin: 4px 8px;
+  background: #1e3a5f;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #93c5fd;
+  text-align: center;
+}

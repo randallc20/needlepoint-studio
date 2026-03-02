@@ -9,14 +9,30 @@ public record StitchCell(string Color, string? DmcNumber, string StitchType);
 
 public record PatternGrid(int Width, int Height, Dictionary<string, StitchCell> Cells);
 
-public record ChatRequest(string Message, List<ChatHistoryItem> History);
+public record ChatRequest(
+    string Message,
+    List<ChatHistoryItem> History,
+    int CanvasWidth = 80,
+    int CanvasHeight = 60,
+    int ColorCount = 25,
+    bool Dithering = true,
+    string[]? PaletteConstraint = null
+);
 
 public record ChatHistoryItem(string Role, string Content);
 
-public record ConvertImageRequest(string ImageBase64, int TargetWidth, int TargetHeight, int ColorCount, bool Dithering);
+public record ConvertImageRequest(
+    string ImageBase64,
+    int TargetWidth,
+    int TargetHeight,
+    int ColorCount,
+    bool Dithering,
+    string DitherMode = "floyd-steinberg",   // "none" | "floyd-steinberg" | "ordered"
+    string[]? AllowedDmcNumbers = null
+);
 
 public record ConvertImageResponse(PatternGrid Pattern, List<UsedColor> Colors);
 
-public record UsedColor(string DmcNumber, string Name, string Hex, int StitchCount);
+public record UsedColor(string DmcNumber, string Name, string Hex, int StitchCount, double DeltaE = 0);
 
 public record AiGenerateRequest(string Prompt, int TargetWidth, int TargetHeight, int ColorCount);

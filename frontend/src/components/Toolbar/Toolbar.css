@@ -26,6 +26,15 @@
   padding: 4px 4px 2px;
 }
 
+.toolbar-sublabel {
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475569;
+  padding: 6px 4px 1px;
+}
+
 .toolbar-divider {
   height: 1px;
   background: #334155;
@@ -121,4 +130,118 @@
   color: #94a3b8;
   min-width: 38px;
   text-align: center;
+  cursor: pointer;
+}
+
+.zoom-label:hover {
+  color: #e2e8f0;
+}
+
+.zoom-presets {
+  display: flex;
+  gap: 2px;
+  padding: 2px 4px;
+}
+
+.zoom-preset-btn {
+  flex: 1;
+  background: #334155;
+  border: none;
+  border-radius: 3px;
+  color: #94a3b8;
+  height: 20px;
+  cursor: pointer;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-preset-btn:hover {
+  background: #475569;
+  color: #e2e8f0;
+}
+
+.eraser-size-row {
+  display: flex;
+  gap: 3px;
+  padding: 4px 6px;
+}
+
+.eraser-size-btn {
+  background: #334155;
+  border: none;
+  border-radius: 4px;
+  color: #94a3b8;
+  width: 26px;
+  height: 22px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s;
+}
+
+.eraser-size-btn:hover {
+  background: #475569;
+  color: #e2e8f0;
+}
+
+.eraser-size-btn.active {
+  background: #3b82f6;
+  color: white;
+}
+
+.shape-fill-row {
+  display: flex;
+  gap: 3px;
+  padding: 4px 6px;
+}
+
+.shape-fill-row .eraser-size-btn {
+  flex: 1;
+  width: auto;
+  padding: 0 6px;
+  font-size: 9px;
+}
+
+.view-mode-row {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px;
+}
+
+.view-mode-btn {
+  flex: 1;
+  background: #334155;
+  border: none;
+  border-radius: 4px;
+  color: #94a3b8;
+  height: 24px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s;
+}
+
+.view-mode-btn:hover {
+  background: #475569;
+  color: #e2e8f0;
+}
+
+.view-mode-btn.active {
+  background: #3b82f6;
+  color: white;
+}
+
+.select-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 4px;
 }
