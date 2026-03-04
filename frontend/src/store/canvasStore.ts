@@ -177,6 +177,17 @@ export const useCanvasStore = create<CanvasState>()(
       s.past = s.past.slice(0, -1);
       s.layers = prev.layers;
       s.activeLayerId = prev.activeLayerId;
+      // Clear selection and prune stale groups to avoid afterimages
+      s.selection = null;
+      s.selectionBounds = null;
+      const activeCells = new Set<string>();
+      for (const layer of s.layers) {
+        for (const key of Object.keys(layer.cells)) activeCells.add(key);
+      }
+      for (const [id, group] of Object.entries(s.groups)) {
+        const alive = [...group.cellKeys].some(k => activeCells.has(k));
+        if (!alive) delete s.groups[id];
+      }
     }),
 
     redo: () => set(s => {
@@ -190,6 +201,17 @@ export const useCanvasStore = create<CanvasState>()(
       s.future = s.future.slice(1);
       s.layers = next.layers;
       s.activeLayerId = next.activeLayerId;
+      // Clear selection and prune stale groups
+      s.selection = null;
+      s.selectionBounds = null;
+      const activeCells = new Set<string>();
+      for (const layer of s.layers) {
+        for (const key of Object.keys(layer.cells)) activeCells.add(key);
+      }
+      for (const [id, group] of Object.entries(s.groups)) {
+        const alive = [...group.cellKeys].some(k => activeCells.has(k));
+        if (!alive) delete s.groups[id];
+      }
     }),
 
     paintCell: (row, col) => {

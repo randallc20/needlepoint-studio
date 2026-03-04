@@ -29,6 +29,35 @@
   margin-left: 4px;
 }
 
+/* ── Tabs ── */
+.stamp-tabs {
+  display: flex;
+  border-bottom: 1px solid #1e293b;
+}
+
+.stamp-tab-btn {
+  flex: 1;
+  padding: 7px;
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  border-bottom: 2px solid transparent;
+}
+
+.stamp-tab-btn:hover {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.stamp-tab-btn.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
+  font-weight: 600;
+}
+
 .stamp-save-btn {
   width: 100%;
   padding: 7px 10px;

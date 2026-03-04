@@ -97,6 +97,24 @@ body {
   background: #0f172a;
 }
 
+.clear-canvas-btn {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #f87171;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.clear-canvas-btn:hover {
+  background: #450a0a;
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
 .preview-btn {
   background: #1e293b;
   border: 1px solid #334155;

@@ -35,6 +35,7 @@ export default function App() {
 
 function Workspace({ user, onLogout }: { user: { displayName: string; isAdmin?: boolean }; onLogout: () => void }) {
   const selection = useCanvasStore(s => s.selection);
+  const clearCanvas = useCanvasStore(s => s.clearCanvas);
   const hasSelection = selection && selection.size > 0;
   const [showPreview, setShowPreview] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
@@ -52,6 +53,13 @@ function Workspace({ user, onLogout }: { user: { displayName: string; isAdmin?: 
           <CanvasSettings />
         </div>
         <div className="header-right">
+          <button
+            className="clear-canvas-btn"
+            onClick={() => { if (confirm('Clear the entire canvas?')) clearCanvas(); }}
+            title="Clear the entire canvas"
+          >
+            Clear Canvas
+          </button>
           <button className="preview-btn" onClick={() => setShowPreview(true)} title="Preview design without grid or tools">
             Preview
           </button>

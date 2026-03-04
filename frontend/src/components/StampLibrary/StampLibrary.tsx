@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useStampStore } from '../../store/stampStore';
 import { useCanvasStore } from '../../store/canvasStore';
 import { convertImageToStitchCells, type DitherMode } from '../../utils/imageConvert';
+import { LettersTab } from './LettersTab';
 import './StampLibrary.css';
 
 export function StampLibrary() {
@@ -26,6 +27,7 @@ export function StampLibrary() {
     lockAspect: true,
   });
   const [converting, setConverting] = useState(false);
+  const [tab, setTab] = useState<'designs' | 'letters'>('designs');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -131,140 +133,158 @@ export function StampLibrary() {
       <div className="stamp-header">
         <span className="stamp-title">
           Design Library
-          {stamps.length > 0 && <span className="stamp-count">({stamps.length})</span>}
         </span>
       </div>
 
-      <button
-        className={`stamp-save-btn ${hasSelection ? 'has-selection' : ''}`}
-        onClick={handleSave}
-        disabled={!hasSelection}
-        title={hasSelection ? 'Save selected cells to the design library' : 'Select cells first, then save'}
-      >
-        {hasSelection ? `Save Selection (${selection!.size})` : 'Save Selection'}
-      </button>
+      <div className="stamp-tabs">
+        <button
+          className={`stamp-tab-btn ${tab === 'designs' ? 'active' : ''}`}
+          onClick={() => setTab('designs')}
+        >
+          Designs{stamps.length > 0 ? ` (${stamps.length})` : ''}
+        </button>
+        <button
+          className={`stamp-tab-btn ${tab === 'letters' ? 'active' : ''}`}
+          onClick={() => setTab('letters')}
+        >
+          Letters
+        </button>
+      </div>
 
-      <button
-        className="stamp-upload-btn"
-        onClick={() => { setShowUpload(!showUpload); setUploadUrl(null); setUploadSize(null); }}
-        title="Upload an image and convert to a reusable stamp"
-      >
-        Upload Image
-      </button>
+      {tab === 'letters' && <LettersTab />}
 
-      {showUpload && (
-        <div className="stamp-upload-form">
-          {!uploadUrl ? (
-            <div
-              className="stamp-dropzone"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <div className="stamp-dropzone-text">Click to choose image</div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                style={{ display: 'none' }}
-                onChange={e => { if (e.target.files?.[0]) handleUploadFile(e.target.files[0]); }}
-              />
-            </div>
-          ) : (
-            <>
-              <img className="stamp-upload-preview" src={uploadUrl} alt="Upload preview" />
-              <div className="stamp-upload-row">
-                <label>W</label>
+      {tab === 'designs' && <>
+        <button
+          className={`stamp-save-btn ${hasSelection ? 'has-selection' : ''}`}
+          onClick={handleSave}
+          disabled={!hasSelection}
+          title={hasSelection ? 'Save selected cells to the design library' : 'Select cells first, then save'}
+        >
+          {hasSelection ? `Save Selection (${selection!.size})` : 'Save Selection'}
+        </button>
+
+        <button
+          className="stamp-upload-btn"
+          onClick={() => { setShowUpload(!showUpload); setUploadUrl(null); setUploadSize(null); }}
+          title="Upload an image and convert to a reusable stamp"
+        >
+          Upload Image
+        </button>
+
+        {showUpload && (
+          <div className="stamp-upload-form">
+            {!uploadUrl ? (
+              <div
+                className="stamp-dropzone"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <div className="stamp-dropzone-text">Click to choose image</div>
                 <input
-                  type="number" min={5} max={200}
-                  value={uploadSettings.targetWidth}
-                  onChange={e => handleWidthChange(Number(e.target.value))}
-                />
-                <label>H</label>
-                <input
-                  type="number" min={5} max={200}
-                  value={uploadSettings.targetHeight}
-                  onChange={e => handleHeightChange(Number(e.target.value))}
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={e => { if (e.target.files?.[0]) handleUploadFile(e.target.files[0]); }}
                 />
               </div>
-              <div className="stamp-upload-row">
-                <label>
+            ) : (
+              <>
+                <img className="stamp-upload-preview" src={uploadUrl} alt="Upload preview" />
+                <div className="stamp-upload-row">
+                  <label>W</label>
                   <input
-                    type="checkbox"
-                    checked={uploadSettings.lockAspect}
-                    onChange={e => setUploadSettings(s => ({ ...s, lockAspect: e.target.checked }))}
+                    type="number" min={5} max={200}
+                    value={uploadSettings.targetWidth}
+                    onChange={e => handleWidthChange(Number(e.target.value))}
                   />
-                  Lock ratio
-                </label>
-              </div>
-              <div className="stamp-upload-row">
-                <label>Colors</label>
-                <input
-                  type="number" min={2} max={50}
-                  value={uploadSettings.colorCount}
-                  onChange={e => setUploadSettings(s => ({ ...s, colorCount: Number(e.target.value) }))}
-                />
-              </div>
-              <div className="stamp-upload-row">
-                <label>Dither</label>
-                <select
-                  value={uploadSettings.ditherMode}
-                  onChange={e => setUploadSettings(s => ({ ...s, ditherMode: e.target.value as DitherMode }))}
-                  className="stamp-upload-select"
-                >
-                  <option value="none">None</option>
-                  <option value="floyd-steinberg">Floyd-Steinberg</option>
-                  <option value="ordered">Ordered</option>
-                </select>
-              </div>
-              <div className="stamp-upload-actions">
-                <button className="stamp-upload-cancel" onClick={closeUpload}>Cancel</button>
-                <button
-                  className="stamp-upload-convert"
-                  onClick={handleConvertAndSave}
-                  disabled={converting}
-                >
-                  {converting ? 'Converting...' : 'Convert & Save'}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {toast && <div className="stamp-toast">{toast}</div>}
-
-      <div className="stamp-list">
-        {stamps.length === 0 && (
-          <div className="stamp-empty">
-            Select cells on the canvas and save them here for reuse across projects
+                  <label>H</label>
+                  <input
+                    type="number" min={5} max={200}
+                    value={uploadSettings.targetHeight}
+                    onChange={e => handleHeightChange(Number(e.target.value))}
+                  />
+                </div>
+                <div className="stamp-upload-row">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={uploadSettings.lockAspect}
+                      onChange={e => setUploadSettings(s => ({ ...s, lockAspect: e.target.checked }))}
+                    />
+                    Lock ratio
+                  </label>
+                </div>
+                <div className="stamp-upload-row">
+                  <label>Colors</label>
+                  <input
+                    type="number" min={2} max={50}
+                    value={uploadSettings.colorCount}
+                    onChange={e => setUploadSettings(s => ({ ...s, colorCount: Number(e.target.value) }))}
+                  />
+                </div>
+                <div className="stamp-upload-row">
+                  <label>Dither</label>
+                  <select
+                    value={uploadSettings.ditherMode}
+                    onChange={e => setUploadSettings(s => ({ ...s, ditherMode: e.target.value as DitherMode }))}
+                    className="stamp-upload-select"
+                  >
+                    <option value="none">None</option>
+                    <option value="floyd-steinberg">Floyd-Steinberg</option>
+                    <option value="ordered">Ordered</option>
+                  </select>
+                </div>
+                <div className="stamp-upload-actions">
+                  <button className="stamp-upload-cancel" onClick={closeUpload}>Cancel</button>
+                  <button
+                    className="stamp-upload-convert"
+                    onClick={handleConvertAndSave}
+                    disabled={converting}
+                  >
+                    {converting ? 'Converting...' : 'Convert & Save'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
-        {stamps.map(stamp => (
-          <div
-            key={stamp.id}
-            className="stamp-item"
-            onClick={() => handleLoad(stamp.id)}
-            title={`${stamp.name} — ${stamp.width}x${stamp.height} — click to load`}
-          >
-            <img
-              className="stamp-thumb"
-              src={stamp.thumbnail}
-              alt={stamp.name}
-              draggable={false}
-            />
-            <div className="stamp-info">
-              <div className="stamp-name">{stamp.name}</div>
-              <div className="stamp-meta">{stamp.width}x{stamp.height}</div>
+
+        {toast && <div className="stamp-toast">{toast}</div>}
+
+        <div className="stamp-list">
+          {stamps.length === 0 && (
+            <div className="stamp-empty">
+              Select cells on the canvas and save them here for reuse across projects
             </div>
-            <button
-              className="stamp-delete"
-              onClick={e => handleDelete(e, stamp.id, stamp.name)}
-              title="Delete"
+          )}
+          {stamps.map(stamp => (
+            <div
+              key={stamp.id}
+              className="stamp-item"
+              onClick={() => handleLoad(stamp.id)}
+              title={`${stamp.name} — ${stamp.width}x${stamp.height} — click to load`}
             >
-              ✕
-            </button>
-          </div>
-        ))}
-      </div>
+              <img
+                className="stamp-thumb"
+                src={stamp.thumbnail}
+                alt={stamp.name}
+                draggable={false}
+              />
+              <div className="stamp-info">
+                <div className="stamp-name">{stamp.name}</div>
+                <div className="stamp-meta">{stamp.width}x{stamp.height}</div>
+              </div>
+              <button
+                className="stamp-delete"
+                onClick={e => handleDelete(e, stamp.id, stamp.name)}
+                title="Delete"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      </>}
     </div>
   );
 }
