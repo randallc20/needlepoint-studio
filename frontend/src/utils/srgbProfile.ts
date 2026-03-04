@@ -9,14 +9,6 @@
  * image editors (Photoshop, GIMP, Lightroom) and print RIP software.
  */
 
-// Minimal sRGB IEC61966-2.1 ICC profile, base64-encoded.
-// Generated from the standard sRGB profile specification.
-const SRGB_PROFILE_BASE64 =
-  'AAACSG' + 'FwcG' + 'QQMAA' + 'AJI' +
-  // This is a manually-constructed minimal sRGB profile.
-  // We build it from raw bytes below for correctness.
-  '';
-
 /**
  * Build a minimal but valid sRGB ICC profile from scratch.
  * This constructs a ~588 byte profile with:

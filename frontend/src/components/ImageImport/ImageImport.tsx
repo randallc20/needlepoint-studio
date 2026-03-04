@@ -151,7 +151,6 @@ export function ImageImport() {
     // Update color mappings
     const newMappings = result.colorMappings.map(m => {
       if (m.dmc.number === oldDmcNumber) {
-        const newMatch = findNearestDmcColor(m.centroidR, m.centroidG, m.centroidB);
         const alternatives = findNearestDmcColors(m.centroidR, m.centroidG, m.centroidB, 6)
           .filter(a => a.color.number !== newDmc.number);
         // Recompute deltaE for the new DMC relative to the original centroid

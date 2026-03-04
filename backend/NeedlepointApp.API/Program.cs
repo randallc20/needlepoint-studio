@@ -35,12 +35,15 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 builder.Services.AddAuthorization();
 
 // ── Services ─────────────────────────────────────────────────────────────────
-builder.Services.AddCors(opts =>
-    opts.AddDefaultPolicy(p =>
-        p.WithOrigins("http://localhost:5173")
-         .AllowAnyHeader()
-         .AllowAnyMethod()
-         .AllowCredentials()));
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddCors(opts =>
+        opts.AddDefaultPolicy(p =>
+            p.WithOrigins("http://localhost:5173")
+             .AllowAnyHeader()
+             .AllowAnyMethod()
+             .AllowCredentials()));
+}
 
 builder.Services.AddSingleton<QuantizationService>();
 builder.Services.AddScoped<AIService>();
@@ -67,7 +70,17 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-app.UseCors();
+if (app.Environment.IsDevelopment())
+{
+    app.UseCors();
+}
+
+// Azure App Service runs behind a TLS-terminating load balancer
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
+                     | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+});
 
 // Serve the Vite-built frontend from wwwroot/
 app.UseDefaultFiles();

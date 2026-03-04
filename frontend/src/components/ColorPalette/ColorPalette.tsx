@@ -40,7 +40,6 @@ export function ColorPalette() {
   const addToPalette = useCanvasStore(s => s.addToPalette);
   const removeFromPalette = useCanvasStore(s => s.removeFromPalette);
   const layers = useCanvasStore(s => s.layers);
-  const config = useCanvasStore(s => s.config);
 
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<'palette' | 'dmc'>('palette');

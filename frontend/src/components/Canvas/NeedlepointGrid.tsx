@@ -200,10 +200,9 @@ export function NeedlepointGrid() {
     return { row, col };
   }, [cellSize, config.width, config.height]);
 
-  const shapeFilled = useCanvasStore(s => s.shapeFilled);
   const isShapeTool = activeTool === 'line' || activeTool === 'rectangle' || activeTool === 'ellipse';
 
-  const handleMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
+  const handleMouseDown = useCallback((_e: Konva.KonvaEventObject<MouseEvent>) => {
     // Skip if panning (pointer tool, middle-mouse, or space+drag)
     if (isPanningRef.current) return;
 
@@ -602,7 +601,7 @@ export function NeedlepointGrid() {
   }, [groups]);
 
   // Grid lines
-  const gridLines: JSX.Element[] = [];
+  const gridLines: React.JSX.Element[] = [];
   if (showGrid) {
     for (let col = 0; col <= config.width; col++) {
       const isGuide = col % GUIDE_EVERY === 0;

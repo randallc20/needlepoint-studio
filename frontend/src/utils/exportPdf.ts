@@ -39,13 +39,11 @@ function computeColorCounts(
   }
 
   const stitchesPerInch = meshCount;
-  const strandLength = 18; // inches per cut length
-  const stitchCoverage = 1.5; // inches of thread per stitch (front + back)
 
   const result: ColorCount[] = [];
   for (const [dmcNumber, data] of counts) {
     const sqIn = data.stitchCount / (stitchesPerInch * stitchesPerInch);
-    const totalInches = data.stitchCount * stitchCoverage;
+    const totalInches = data.stitchCount * 1.5; // inches of thread per stitch (front + back)
     const yards = totalInches / 36;
     const skeins = Math.ceil(yards / (8.7)); // 8.7 yards per DMC skein
     result.push({

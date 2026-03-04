@@ -20,5 +20,10 @@ appsettings.Development.json
 .DS_Store
 Thumbs.db
 
+# Deployment artifacts
+backend/**/wwwroot/
+backend/**/publish/
+deploy.zip
+
 # Logs
 *.log

@@ -31,9 +31,6 @@ function crc32(data: Uint8Array): number {
 
 // ─── PNG chunk helpers ─────────────────────────────────────────────────
 
-/** PNG file signature (8 bytes) */
-const PNG_SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-
 /**
  * Build a complete PNG chunk: [length(4)] [type(4)] [data(N)] [crc(4)]
  * CRC covers type + data.
@@ -132,7 +129,7 @@ function insertChunkBeforeIDAT(png: Uint8Array, chunk: Uint8Array): Uint8Array {
  * @returns New PNG buffer with pHYs chunk embedded
  */
 export function injectPngDpi(pngBuffer: ArrayBuffer, dpi: number): ArrayBuffer {
-  let png = new Uint8Array(pngBuffer);
+  let png: Uint8Array = new Uint8Array(pngBuffer);
 
   // Remove existing pHYs chunk if present
   if (hasChunk(png, 'pHYs')) {
@@ -160,7 +157,7 @@ export function injectPngDpi(pngBuffer: ArrayBuffer, dpi: number): ArrayBuffer {
 
   const physChunk = buildChunk('pHYs', physData);
   const result = insertChunkBeforeIDAT(png, physChunk);
-  return result.buffer;
+  return result.buffer as ArrayBuffer;
 }
 
 /**
@@ -179,7 +176,7 @@ export function injectPngIcc(
   iccProfile: Uint8Array,
   profileName: string = 'sRGB'
 ): ArrayBuffer {
-  let png = new Uint8Array(pngBuffer);
+  let png: Uint8Array = new Uint8Array(pngBuffer);
 
   // Remove existing iCCP or sRGB chunks (they're mutually exclusive per PNG spec)
   if (hasChunk(png, 'iCCP')) {
@@ -213,7 +210,7 @@ export function injectPngIcc(
 
   const iccpChunk = buildChunk('iCCP', data);
   const result = insertChunkBeforeIDAT(png, iccpChunk);
-  return result.buffer;
+  return result.buffer as ArrayBuffer;
 }
 
 // ─── Internal helpers ──────────────────────────────────────────────────
