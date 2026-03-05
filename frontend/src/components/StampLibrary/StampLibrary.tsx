@@ -28,6 +28,7 @@ export function StampLibrary() {
   });
   const [converting, setConverting] = useState(false);
   const [tab, setTab] = useState<'designs' | 'letters'>('designs');
+  const [collapsed, setCollapsed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -128,12 +129,21 @@ export function StampLibrary() {
     setUploadSize(null);
   };
 
+  if (collapsed) {
+    return (
+      <div className="panel-collapsed-bar" onClick={() => setCollapsed(false)} title="Expand Design Library">
+        <span className="panel-collapsed-title">Designs</span>
+      </div>
+    );
+  }
+
   return (
     <div className="stamp-panel">
       <div className="stamp-header">
         <span className="stamp-title">
           Design Library
         </span>
+        <button className="panel-collapse-btn" onClick={() => setCollapsed(true)} title="Collapse">&#x2039;</button>
       </div>
 
       <div className="stamp-tabs">

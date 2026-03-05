@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { DMC_COLORS, findNearestDmcColor } from '../../data/dmcColors';
 import { getMatchQuality, getMatchQualityLabel, getMatchQualityColor } from '../../utils/colorScience';
@@ -50,6 +50,7 @@ export function ColorPalette() {
   const [hoveredColor, setHoveredColor] = useState<DmcColor | null>(null);
   const [recentColors, setRecentColors] = useState<DmcColor[]>([]);
   const [lastMatchDeltaE, setLastMatchDeltaE] = useState<number | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
   const pickerRef = useRef<HTMLInputElement>(null);
 
   // Filter DMC library
@@ -147,8 +148,22 @@ export function ColorPalette() {
     return dmc?.name ?? '';
   }, [activeDmcNumber]);
 
+  if (collapsed) {
+    return (
+      <div className="panel-collapsed-bar" onClick={() => setCollapsed(false)} title="Expand Colors">
+        <span className="panel-collapsed-title">Colors</span>
+      </div>
+    );
+  }
+
   return (
     <div className="color-palette">
+      {/* Header */}
+      <div className="color-palette-header">
+        <span className="color-palette-title">Colors</span>
+        <button className="panel-collapse-btn" onClick={() => setCollapsed(true)} title="Collapse">&#x2039;</button>
+      </div>
+
       {/* Active color swatch */}
       <div className="active-color-section">
         <div

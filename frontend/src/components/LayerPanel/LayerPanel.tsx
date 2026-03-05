@@ -14,6 +14,7 @@ export function LayerPanel() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [collapsed, setCollapsed] = useState(false);
 
   const startEdit = (id: string, name: string) => {
     setEditingId(id);
@@ -30,11 +31,20 @@ export function LayerPanel() {
   // Show layers in reverse order (top layer first visually)
   const reversedLayers = [...layers].reverse();
 
+  if (collapsed) {
+    return (
+      <div className="panel-collapsed-bar" onClick={() => setCollapsed(false)} title="Expand Layers">
+        <span className="panel-collapsed-title">Layers</span>
+      </div>
+    );
+  }
+
   return (
     <div className="layer-panel">
       <div className="layer-header">
         <span className="layer-title">Layers</span>
         <div className="layer-actions">
+          <button className="panel-collapse-btn" onClick={() => setCollapsed(true)} title="Collapse">&#x2039;</button>
           <button className="layer-icon-btn" onClick={addLayer} title="Add Layer">+</button>
           <button
             className="layer-icon-btn"

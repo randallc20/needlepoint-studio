@@ -9,6 +9,23 @@
   overflow: hidden;
 }
 
+/* ── Header ── */
+.color-palette-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.color-palette-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+
 /* ── Active color ── */
 .active-color-section {
   display: flex;
