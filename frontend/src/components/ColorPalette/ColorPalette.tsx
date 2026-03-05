@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { DMC_COLORS, findNearestDmcColor } from '../../data/dmcColors';
 import { getMatchQuality, getMatchQualityLabel, getMatchQualityColor } from '../../utils/colorScience';
