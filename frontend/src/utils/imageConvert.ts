@@ -760,3 +760,168 @@ export async function convertImageToStitchCells(
 
   return { cells, width: targetWidth, height: targetHeight };
 }
+
+// ─── Auto-analyze image for optimal settings ────────────────────────
+
+export interface AutoSettings {
+  colorCount: number;
+  contrast: number;
+  sharpness: number;
+  smoothing: number;
+  cleanup: CleanupLevel;
+  ditherMode: DitherMode;
+  mergeSmallColors: boolean;
+}
+
+/**
+ * Analyze an image and return recommended conversion settings.
+ *
+ * Measures:
+ * - Color complexity (how many distinct color clusters)
+ * - Edge density (how much detail / line work)
+ * - Contrast range (histogram spread)
+ * - Noise level (high-frequency variation)
+ *
+ * Then maps these to optimal needlepoint settings.
+ */
+export function analyzeImage(
+  pixels: RgbPixel[],
+  width: number,
+  height: number,
+): AutoSettings {
+  const total = pixels.length;
+
+  // ── 1. Measure color complexity ──────────────────────────────────
+  // Sample pixels into a coarse 8x8x8 color cube to estimate distinct regions
+  const colorBuckets = new Set<number>();
+  for (let i = 0; i < total; i += Math.max(1, Math.floor(total / 2000))) {
+    const p = pixels[i];
+    const bucket = (Math.floor(p.r / 32) << 6) | (Math.floor(p.g / 32) << 3) | Math.floor(p.b / 32);
+    colorBuckets.add(bucket);
+  }
+  const colorComplexity = colorBuckets.size; // 1-512 range
+
+  // ── 2. Measure edge density (Sobel gradient magnitude) ──────────
+  let edgeSum = 0;
+  let edgeCount = 0;
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = y * width + x;
+      const p = pixels[idx];
+      const lum = 0.299 * p.r + 0.587 * p.g + 0.114 * p.b;
+
+      // Horizontal gradient
+      const lumLeft = 0.299 * pixels[idx - 1].r + 0.587 * pixels[idx - 1].g + 0.114 * pixels[idx - 1].b;
+      const lumRight = 0.299 * pixels[idx + 1].r + 0.587 * pixels[idx + 1].g + 0.114 * pixels[idx + 1].b;
+      const gx = lumRight - lumLeft;
+
+      // Vertical gradient
+      const lumTop = 0.299 * pixels[idx - width].r + 0.587 * pixels[idx - width].g + 0.114 * pixels[idx - width].b;
+      const lumBot = 0.299 * pixels[idx + width].r + 0.587 * pixels[idx + width].g + 0.114 * pixels[idx + width].b;
+      const gy = lumBot - lumTop;
+
+      edgeSum += Math.sqrt(gx * gx + gy * gy);
+      edgeCount++;
+
+      // Skip some pixels for speed on large images
+      if (edgeCount > 5000 && x % 2 === 0) x++;
+    }
+  }
+  const avgEdge = edgeCount > 0 ? edgeSum / edgeCount : 0;
+  // Normalize: 0-50+ typical range, cap at 80
+  const edgeDensity = Math.min(80, avgEdge);
+
+  // ── 3. Measure contrast (luminance histogram spread) ────────────
+  let lumMin = 255, lumMax = 0;
+  const sampleStep = Math.max(1, Math.floor(total / 3000));
+  for (let i = 0; i < total; i += sampleStep) {
+    const p = pixels[i];
+    const lum = 0.299 * p.r + 0.587 * p.g + 0.114 * p.b;
+    if (lum < lumMin) lumMin = lum;
+    if (lum > lumMax) lumMax = lum;
+  }
+  const contrastRange = lumMax - lumMin; // 0-255
+
+  // ── 4. Measure noise (local variance) ───────────────────────────
+  let noiseSum = 0;
+  let noiseSamples = 0;
+  for (let y = 1; y < height - 1; y += 2) {
+    for (let x = 1; x < width - 1; x += 2) {
+      const idx = y * width + x;
+      const center = pixels[idx];
+
+      // Compute variance with 4 neighbors
+      const neighbors = [
+        pixels[idx - 1], pixels[idx + 1],
+        pixels[idx - width], pixels[idx + width],
+      ];
+      let variance = 0;
+      for (const n of neighbors) {
+        const dr = center.r - n.r;
+        const dg = center.g - n.g;
+        const db = center.b - n.b;
+        variance += dr * dr + dg * dg + db * db;
+      }
+      noiseSum += variance / 4;
+      noiseSamples++;
+      if (noiseSamples > 3000) break;
+    }
+    if (noiseSamples > 3000) break;
+  }
+  const avgNoise = noiseSamples > 0 ? Math.sqrt(noiseSum / noiseSamples) : 0;
+  // Normalize: 0-100+ typical range
+  const noiseLevel = Math.min(100, avgNoise);
+
+  // ── Map measurements to settings ────────────────────────────────
+
+  // Color count: more complex images need more colors
+  let colorCount: number;
+  if (colorComplexity < 20) {
+    colorCount = Math.max(4, Math.min(8, Math.round(colorComplexity * 0.5)));
+  } else if (colorComplexity < 60) {
+    colorCount = Math.round(8 + (colorComplexity - 20) * 0.15);
+  } else if (colorComplexity < 150) {
+    colorCount = Math.round(14 + (colorComplexity - 60) * 0.1);
+  } else {
+    colorCount = Math.min(30, Math.round(23 + (colorComplexity - 150) * 0.02));
+  }
+  colorCount = Math.max(4, Math.min(35, colorCount));
+
+  // Contrast boost: low contrast images need more
+  let contrast: number;
+  if (contrastRange > 200) contrast = 10;
+  else if (contrastRange > 150) contrast = 25;
+  else if (contrastRange > 100) contrast = 40;
+  else contrast = 55;
+
+  // Smoothing: noisy images need more, clean images need less
+  let smoothing: number;
+  if (noiseLevel < 10) smoothing = 15;
+  else if (noiseLevel < 25) smoothing = 30;
+  else if (noiseLevel < 50) smoothing = 50;
+  else smoothing = 65;
+
+  // Sharpness: images with important edges need more, but reduce if noisy
+  let sharpness: number;
+  if (edgeDensity > 30) sharpness = 55;
+  else if (edgeDensity > 15) sharpness = 40;
+  else sharpness = 25;
+  // Reduce sharpness if image is noisy (sharpening amplifies noise)
+  if (noiseLevel > 40) sharpness = Math.max(10, sharpness - 20);
+
+  // Cleanup: more for noisy/complex, less for clean
+  let cleanup: CleanupLevel;
+  if (noiseLevel < 15 && colorComplexity < 30) cleanup = 'light';
+  else if (noiseLevel > 50 || colorComplexity > 120) cleanup = 'heavy';
+  else cleanup = 'medium';
+
+  return {
+    colorCount,
+    contrast: Math.round(contrast),
+    sharpness: Math.round(sharpness),
+    smoothing: Math.round(smoothing),
+    cleanup,
+    ditherMode: 'none',
+    mergeSmallColors: true,
+  };
+}

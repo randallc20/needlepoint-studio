@@ -240,6 +240,29 @@
   line-height: 1.2;
 }
 
+.import-preset-auto {
+  border-color: #4f46e5;
+  background: #1e1b4b;
+}
+
+.import-preset-auto:hover {
+  border-color: #6366f1;
+  background: #2e1065;
+}
+
+.import-preset-auto.active {
+  border-color: #818cf8;
+  background: #312e81;
+}
+
+.import-preset-auto .import-preset-name {
+  color: #c7d2fe;
+}
+
+.import-preset-auto.active .import-preset-name {
+  color: #a5b4fc;
+}
+
 /* ─── Section labels ──────────────────────────────────────────── */
 
 .import-section-label {

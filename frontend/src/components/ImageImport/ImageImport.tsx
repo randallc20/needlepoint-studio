@@ -9,6 +9,7 @@ import {
   bilateralFilter,
   cleanupPattern,
   mergeSimilarColors,
+  analyzeImage,
   type RgbPixel,
   type DitherMode,
   type CleanupLevel,
@@ -16,7 +17,7 @@ import {
 import type { StitchCell, DmcColor } from '../../types';
 import './ImageImport.css';
 
-type Preset = 'simple' | 'standard' | 'detailed' | 'custom';
+type Preset = 'auto' | 'simple' | 'standard' | 'detailed' | 'custom';
 
 interface ConvertSettings {
   targetWidth: number;
@@ -148,6 +149,19 @@ export function ImageImport() {
     setLivePreviewUrl(null);
   }, []);
 
+  // Auto-analyze when image is first loaded
+  const hasAutoAnalyzed = useRef(false);
+  useEffect(() => {
+    if (imageUrl && !hasAutoAnalyzed.current) {
+      hasAutoAnalyzed.current = true;
+      // Small delay to ensure image URL is set
+      setTimeout(() => runAutoAnalyze(), 100);
+    }
+    if (!imageUrl) {
+      hasAutoAnalyzed.current = false;
+    }
+  }, [imageUrl, runAutoAnalyze]);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
@@ -173,8 +187,68 @@ export function ImageImport() {
   };
 
   const applyPreset = (preset: Exclude<Preset, 'custom'>) => {
+    if (preset === 'auto') {
+      runAutoAnalyze();
+      return;
+    }
     setSettings(s => ({ ...s, ...PRESETS[preset], preset }));
   };
+
+  const runAutoAnalyze = useCallback(async () => {
+    if (!imageUrl) return;
+
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = reject;
+        img.src = imageUrl;
+      });
+
+      // Analyze at a manageable size (max 100px) for speed
+      const aspect = img.naturalWidth / img.naturalHeight;
+      let aw = Math.min(img.naturalWidth, 100);
+      let ah = Math.round(aw / aspect);
+      if (ah > 100) { ah = 100; aw = Math.round(ah * aspect); }
+      aw = Math.max(aw, 4); ah = Math.max(ah, 4);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = aw;
+      canvas.height = ah;
+      const ctx = canvas.getContext('2d')!;
+
+      if (settings.bgEnabled) {
+        ctx.fillStyle = settings.bgColor;
+        ctx.fillRect(0, 0, aw, ah);
+      }
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, aw, ah);
+
+      const imageData = ctx.getImageData(0, 0, aw, ah);
+      const pixels: RgbPixel[] = [];
+      for (let i = 0; i < imageData.data.length; i += 4) {
+        pixels.push({ r: imageData.data[i], g: imageData.data[i + 1], b: imageData.data[i + 2] });
+      }
+
+      const auto = analyzeImage(pixels, aw, ah);
+      setSettings(s => ({
+        ...s,
+        colorCount: auto.colorCount,
+        contrast: auto.contrast,
+        sharpness: auto.sharpness,
+        smoothing: auto.smoothing,
+        cleanup: auto.cleanup,
+        ditherMode: auto.ditherMode,
+        mergeSmallColors: auto.mergeSmallColors,
+        preset: 'auto',
+      }));
+    } catch {
+      // Fallback to standard preset if analysis fails
+      setSettings(s => ({ ...s, ...PRESETS.standard, preset: 'standard' }));
+    }
+  }, [imageUrl, settings.bgEnabled, settings.bgColor]);
 
   // ─── Live preview (debounced) ──────────────────────────────────────
 
@@ -662,6 +736,13 @@ export function ImageImport() {
                   {/* ── Presets ── */}
                   <div className="import-section-label">Preset</div>
                   <div className="import-preset-row">
+                    <button
+                      className={`import-preset-btn import-preset-auto ${settings.preset === 'auto' ? 'active' : ''}`}
+                      onClick={() => applyPreset('auto')}
+                    >
+                      <span className="import-preset-name">Auto</span>
+                      <span className="import-preset-desc">Analyzes image</span>
+                    </button>
                     {(['simple', 'standard', 'detailed'] as const).map(p => (
                       <button
                         key={p}
