@@ -192,6 +192,54 @@
   border-color: #3b82f6;
 }
 
+/* ─── Preset buttons ─────────────────────────────────────────── */
+
+.import-preset-row {
+  display: flex;
+  gap: 6px;
+}
+
+.import-preset-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  background: #1e293b;
+  border: 2px solid #334155;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.import-preset-btn:hover {
+  border-color: #475569;
+  background: #283548;
+}
+
+.import-preset-btn.active {
+  border-color: #3b82f6;
+  background: #1e3a5f;
+}
+
+.import-preset-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.import-preset-btn.active .import-preset-name {
+  color: #93c5fd;
+}
+
+.import-preset-desc {
+  font-size: 10px;
+  color: #64748b;
+  text-align: center;
+  line-height: 1.2;
+}
+
 /* ─── Section labels ──────────────────────────────────────────── */
 
 .import-section-label {

@@ -1,14 +1,12 @@
-import { useState, useRef, useCallback, useMemo } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { findNearestDmcColor, findNearestDmcColors, DMC_COLORS } from '../../data/dmcColors';
 import { getMatchQuality, getMatchQualityLabel, getMatchQualityColor } from '../../utils/colorScience';
 import {
-  kMeansQuantize,
-  findNearestCentroid,
-  floydSteinbergDither,
-  orderedDither,
+  quantizePixels,
   enhanceContrast,
   sharpenPixels,
+  bilateralFilter,
   cleanupPattern,
   mergeSimilarColors,
   type RgbPixel,
@@ -17,6 +15,8 @@ import {
 } from '../../utils/imageConvert';
 import type { StitchCell, DmcColor } from '../../types';
 import './ImageImport.css';
+
+type Preset = 'simple' | 'standard' | 'detailed' | 'custom';
 
 interface ConvertSettings {
   targetWidth: number;
@@ -27,11 +27,43 @@ interface ConvertSettings {
   restrictToPalette: boolean;
   bgColor: string;
   bgEnabled: boolean;
-  contrast: number;       // 0-100
-  sharpness: number;      // 0-100
+  contrast: number;
+  sharpness: number;
+  smoothing: number;       // bilateral filter strength 0-100
   cleanup: CleanupLevel;
   mergeSmallColors: boolean;
+  preset: Preset;
 }
+
+const PRESETS: Record<Exclude<Preset, 'custom'>, Partial<ConvertSettings>> = {
+  simple: {
+    colorCount: 8,
+    ditherMode: 'none',
+    contrast: 40,
+    sharpness: 30,
+    smoothing: 60,
+    cleanup: 'heavy',
+    mergeSmallColors: true,
+  },
+  standard: {
+    colorCount: 12,
+    ditherMode: 'none',
+    contrast: 30,
+    sharpness: 40,
+    smoothing: 40,
+    cleanup: 'medium',
+    mergeSmallColors: true,
+  },
+  detailed: {
+    colorCount: 24,
+    ditherMode: 'none',
+    contrast: 20,
+    sharpness: 50,
+    smoothing: 20,
+    cleanup: 'light',
+    mergeSmallColors: true,
+  },
+};
 
 /** One unique color mapping produced during conversion */
 interface ColorMapping {
@@ -73,11 +105,18 @@ export function ImageImport() {
     bgEnabled: true,
     contrast: 30,
     sharpness: 40,
+    smoothing: 40,
     cleanup: 'medium',
     mergeSmallColors: true,
+    preset: 'standard',
   });
   const [converting, setConverting] = useState(false);
   const [result, setResult] = useState<ConvertResult | null>(null);
+
+  // Live preview state
+  const [livePreviewUrl, setLivePreviewUrl] = useState<string | null>(null);
+  const livePreviewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const livePreviewAbort = useRef<{ cancelled: boolean }>({ cancelled: false });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -106,6 +145,7 @@ export function ImageImport() {
     img.src = url;
     setImageUrl(url);
     setResult(null);
+    setLivePreviewUrl(null);
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -117,20 +157,161 @@ export function ImageImport() {
   const handleWidthChange = (w: number) => {
     if (settings.lockAspect && imageSize) {
       const aspect = imageSize.w / imageSize.h;
-      setSettings(s => ({ ...s, targetWidth: w, targetHeight: Math.round(w / aspect) }));
+      setSettings(s => ({ ...s, targetWidth: w, targetHeight: Math.round(w / aspect), preset: 'custom' }));
     } else {
-      setSettings(s => ({ ...s, targetWidth: w }));
+      setSettings(s => ({ ...s, targetWidth: w, preset: 'custom' }));
     }
   };
 
   const handleHeightChange = (h: number) => {
     if (settings.lockAspect && imageSize) {
       const aspect = imageSize.w / imageSize.h;
-      setSettings(s => ({ ...s, targetHeight: h, targetWidth: Math.round(h * aspect) }));
+      setSettings(s => ({ ...s, targetHeight: h, targetWidth: Math.round(h * aspect), preset: 'custom' }));
     } else {
-      setSettings(s => ({ ...s, targetHeight: h }));
+      setSettings(s => ({ ...s, targetHeight: h, preset: 'custom' }));
     }
   };
+
+  const applyPreset = (preset: Exclude<Preset, 'custom'>) => {
+    setSettings(s => ({ ...s, ...PRESETS[preset], preset }));
+  };
+
+  // ─── Live preview (debounced) ──────────────────────────────────────
+
+  useEffect(() => {
+    if (!imageUrl || !isOpen || result) return;
+
+    // Cancel any pending preview
+    if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
+    livePreviewAbort.current.cancelled = true;
+
+    const token = { cancelled: false };
+    livePreviewAbort.current = token;
+
+    livePreviewTimer.current = setTimeout(async () => {
+      if (token.cancelled) return;
+
+      try {
+        // Use a small preview size for speed (max 60px on longest side)
+        const maxPreviewDim = 60;
+        const aspect = settings.targetWidth / settings.targetHeight;
+        let pw: number, ph: number;
+        if (aspect >= 1) {
+          pw = Math.min(settings.targetWidth, maxPreviewDim);
+          ph = Math.round(pw / aspect);
+        } else {
+          ph = Math.min(settings.targetHeight, maxPreviewDim);
+          pw = Math.round(ph * aspect);
+        }
+        pw = Math.max(pw, 4);
+        ph = Math.max(ph, 4);
+
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = reject;
+          img.src = imageUrl;
+        });
+        if (token.cancelled) return;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = pw;
+        canvas.height = ph;
+        const ctx = canvas.getContext('2d')!;
+
+        if (settings.bgEnabled) {
+          ctx.fillStyle = settings.bgColor;
+          ctx.fillRect(0, 0, pw, ph);
+        }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, pw, ph);
+
+        const imageData = ctx.getImageData(0, 0, pw, ph);
+        let pixels: RgbPixel[] = [];
+        for (let i = 0; i < imageData.data.length; i += 4) {
+          pixels.push({ r: imageData.data[i], g: imageData.data[i + 1], b: imageData.data[i + 2] });
+        }
+
+        if (token.cancelled) return;
+
+        if (settings.contrast > 0) pixels = enhanceContrast(pixels, settings.contrast / 100);
+        if (settings.smoothing > 0) pixels = bilateralFilter(pixels, pw, ph, settings.smoothing / 100);
+        if (settings.sharpness > 0) pixels = sharpenPixels(pixels, pw, ph, settings.sharpness / 100);
+
+        if (token.cancelled) return;
+
+        const restrictTo = settings.restrictToPalette && palette.length > 0
+          ? palette.map(c => c.number)
+          : undefined;
+
+        // Quick single-run quantize for preview
+        const qResult = quantizePixels(pixels, settings.colorCount, settings.ditherMode, pw, ph, 1);
+
+        // Map to DMC
+        const centroidToDmc = new Map<number, DmcColor>();
+        for (let ci = 0; ci < qResult.centroidRgb.length; ci++) {
+          const rgb = qResult.centroidRgb[ci];
+          const match = findNearestDmcColor(rgb.r, rgb.g, rgb.b, restrictTo);
+          centroidToDmc.set(ci, match.color);
+        }
+
+        // Build DMC grid
+        const dmcGrid: string[][] = [];
+        for (let y = 0; y < ph; y++) {
+          const row: string[] = [];
+          for (let x = 0; x < pw; x++) {
+            const ci = qResult.assignments[y * pw + x];
+            row.push(centroidToDmc.get(ci)!.number);
+          }
+          dmcGrid.push(row);
+        }
+
+        let processedGrid = dmcGrid;
+        if (settings.mergeSmallColors) {
+          processedGrid = mergeSimilarColors(processedGrid, pw, ph, 0.5);
+        }
+        processedGrid = cleanupPattern(processedGrid, pw, ph, settings.cleanup);
+
+        if (token.cancelled) return;
+
+        // Render preview
+        const dmcLookup = new Map<string, DmcColor>();
+        for (const c of DMC_COLORS) dmcLookup.set(c.number, c);
+
+        const prevCanvas = document.createElement('canvas');
+        prevCanvas.width = pw;
+        prevCanvas.height = ph;
+        const pCtx = prevCanvas.getContext('2d')!;
+        const pData = pCtx.createImageData(pw, ph);
+        for (let y = 0; y < ph; y++) {
+          for (let x = 0; x < pw; x++) {
+            const dmc = dmcLookup.get(processedGrid[y][x]);
+            const pi = (y * pw + x) * 4;
+            if (dmc) {
+              pData.data[pi] = dmc.r;
+              pData.data[pi + 1] = dmc.g;
+              pData.data[pi + 2] = dmc.b;
+            }
+            pData.data[pi + 3] = 255;
+          }
+        }
+        pCtx.putImageData(pData, 0, 0);
+
+        if (!token.cancelled) {
+          setLivePreviewUrl(prevCanvas.toDataURL());
+        }
+      } catch {
+        // Silently ignore preview errors
+      }
+    }, 400); // 400ms debounce
+
+    return () => {
+      token.cancelled = true;
+      if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
+    };
+  }, [imageUrl, isOpen, result, settings, palette]);
 
   // Swap a DMC color in the result
   const swapColor = useCallback((oldDmcNumber: string, newDmc: DmcColor) => {
@@ -144,7 +325,6 @@ export function ImageImport() {
       }
     }
 
-    // Update preview
     const previewCanvas = document.createElement('canvas');
     previewCanvas.width = result.width;
     previewCanvas.height = result.height;
@@ -165,7 +345,6 @@ export function ImageImport() {
     }
     pCtx.putImageData(pData, 0, 0);
 
-    // Update color mappings
     const newMappings = result.colorMappings.map(m => {
       if (m.dmc.number === oldDmcNumber) {
         const alternatives = findNearestDmcColors(m.centroidR, m.centroidG, m.centroidB, 6)
@@ -190,7 +369,7 @@ export function ImageImport() {
     });
   }, [result]);
 
-  // ─── Main conversion pipeline ──────────────────────────────────────
+  // ─── Full conversion pipeline ──────────────────────────────────────
   const convertImage = useCallback(async () => {
     if (!imageUrl) return;
     setConverting(true);
@@ -210,7 +389,6 @@ export function ImageImport() {
       canvas.height = settings.targetHeight;
       const ctx = canvas.getContext('2d')!;
 
-      // Step 1: Fill background color (handles transparent images)
       if (settings.bgEnabled) {
         ctx.fillStyle = settings.bgColor;
         ctx.fillRect(0, 0, settings.targetWidth, settings.targetHeight);
@@ -226,68 +404,54 @@ export function ImageImport() {
         pixels.push({ r: imageData.data[i], g: imageData.data[i + 1], b: imageData.data[i + 2] });
       }
 
-      // Step 2: Pre-processing — contrast enhancement
+      // Pre-processing
       if (settings.contrast > 0) {
         pixels = enhanceContrast(pixels, settings.contrast / 100);
       }
-
-      // Step 3: Pre-processing — sharpen edges
+      if (settings.smoothing > 0) {
+        pixels = bilateralFilter(pixels, settings.targetWidth, settings.targetHeight, settings.smoothing / 100);
+      }
       if (settings.sharpness > 0) {
         pixels = sharpenPixels(pixels, settings.targetWidth, settings.targetHeight, settings.sharpness / 100);
       }
 
-      // Step 4: K-means++ clustering
-      const centroids = kMeansQuantize(pixels, settings.colorCount);
-
-      // Step 5: Assign pixels using selected dithering
-      let quantized: RgbPixel[];
-      switch (settings.ditherMode) {
-        case 'floyd-steinberg':
-          quantized = floydSteinbergDither(pixels, centroids, settings.targetWidth, settings.targetHeight);
-          break;
-        case 'ordered':
-          quantized = orderedDither(pixels, centroids, settings.targetWidth, settings.targetHeight);
-          break;
-        default:
-          quantized = pixels.map(p => findNearestCentroid(p, centroids));
-      }
-
-      // Step 6: Map quantized colors to DMC
+      // Quantization (3 runs, pick best)
       const restrictTo = settings.restrictToPalette && palette.length > 0
         ? palette.map(c => c.number)
         : undefined;
 
-      const centroidToDmc = new Map<string, { dmc: DmcColor; deltaE: number; centroid: RgbPixel }>();
+      const qResult = quantizePixels(
+        pixels, settings.colorCount, settings.ditherMode,
+        settings.targetWidth, settings.targetHeight, 3,
+      );
 
-      // Build DMC grid (2D array of DMC numbers for post-processing)
+      // Map centroids to DMC
+      const centroidToDmc = new Map<number, { dmc: DmcColor; deltaE: number; centroid: RgbPixel }>();
+      for (let ci = 0; ci < qResult.centroidRgb.length; ci++) {
+        const rgb = qResult.centroidRgb[ci];
+        const match = findNearestDmcColor(rgb.r, rgb.g, rgb.b, restrictTo);
+        centroidToDmc.set(ci, { dmc: match.color, deltaE: match.deltaE, centroid: rgb });
+      }
+
+      // Build DMC grid
       const dmcGrid: string[][] = [];
       for (let y = 0; y < settings.targetHeight; y++) {
         const row: string[] = [];
         for (let x = 0; x < settings.targetWidth; x++) {
-          const idx = y * settings.targetWidth + x;
-          const qColor = quantized[idx];
-          const cKey = `${qColor.r},${qColor.g},${qColor.b}`;
-
-          if (!centroidToDmc.has(cKey)) {
-            const match = findNearestDmcColor(qColor.r, qColor.g, qColor.b, restrictTo);
-            centroidToDmc.set(cKey, { dmc: match.color, deltaE: match.deltaE, centroid: qColor });
-          }
-
-          row.push(centroidToDmc.get(cKey)!.dmc.number);
+          const ci = qResult.assignments[y * settings.targetWidth + x];
+          row.push(centroidToDmc.get(ci)!.dmc.number);
         }
         dmcGrid.push(row);
       }
 
-      // Step 7: Post-processing — merge tiny color regions
+      // Post-processing
       let processedGrid = dmcGrid;
       if (settings.mergeSmallColors) {
         processedGrid = mergeSimilarColors(processedGrid, settings.targetWidth, settings.targetHeight, 0.5);
       }
-
-      // Step 8: Post-processing — cleanup noise
       processedGrid = cleanupPattern(processedGrid, settings.targetWidth, settings.targetHeight, settings.cleanup);
 
-      // Step 9: Build final cells from processed grid
+      // Build final cells
       const dmcLookup = new Map<string, DmcColor>();
       for (const c of DMC_COLORS) dmcLookup.set(c.number, c);
 
@@ -304,7 +468,7 @@ export function ImageImport() {
         }
       }
 
-      // Build color mapping summaries for review panel
+      // Build color mappings
       const stitchCounts = new Map<string, number>();
       for (const cell of Object.values(cells)) {
         stitchCounts.set(cell.dmcNumber!, (stitchCounts.get(cell.dmcNumber!) || 0) + 1);
@@ -314,7 +478,7 @@ export function ImageImport() {
       const seenDmc = new Set<string>();
       for (const [, { dmc, deltaE, centroid }] of centroidToDmc) {
         if (seenDmc.has(dmc.number)) continue;
-        if (!stitchCounts.has(dmc.number)) continue; // skip colors eliminated by cleanup
+        if (!stitchCounts.has(dmc.number)) continue;
         seenDmc.add(dmc.number);
         const alts = findNearestDmcColors(centroid.r, centroid.g, centroid.b, 6)
           .filter(a => a.color.number !== dmc.number)
@@ -331,7 +495,7 @@ export function ImageImport() {
       }
       colorMappings.sort((a, b) => b.stitchCount - a.stitchCount);
 
-      // Generate preview image
+      // Generate preview
       const previewCanvas = document.createElement('canvas');
       previewCanvas.width = settings.targetWidth;
       previewCanvas.height = settings.targetHeight;
@@ -374,12 +538,14 @@ export function ImageImport() {
     setIsOpen(false);
     setImageUrl(null);
     setResult(null);
+    setLivePreviewUrl(null);
   }, [result, setConfig, loadCells]);
 
   const close = () => {
     setIsOpen(false);
     setImageUrl(null);
     setResult(null);
+    setLivePreviewUrl(null);
   };
 
   const poorMatches = result?.colorMappings.filter(m => m.deltaE > 6) || [];
@@ -483,9 +649,33 @@ export function ImageImport() {
                     <img src={imageUrl!} alt="Original" className="preview-image" />
                     {imageSize && <div className="preview-info">{imageSize.w} x {imageSize.h}px</div>}
                   </div>
+                  {livePreviewUrl && (
+                    <div className="preview-box">
+                      <div className="preview-label">Quick Preview</div>
+                      <img src={livePreviewUrl} alt="Live preview" className="preview-image pixelated" />
+                      <div className="preview-info">~{settings.colorCount} colors, {settings.cleanup} cleanup</div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="import-settings">
+                  {/* ── Presets ── */}
+                  <div className="import-section-label">Preset</div>
+                  <div className="import-preset-row">
+                    {(['simple', 'standard', 'detailed'] as const).map(p => (
+                      <button
+                        key={p}
+                        className={`import-preset-btn ${settings.preset === p ? 'active' : ''}`}
+                        onClick={() => applyPreset(p)}
+                      >
+                        <span className="import-preset-name">{p.charAt(0).toUpperCase() + p.slice(1)}</span>
+                        <span className="import-preset-desc">
+                          {p === 'simple' ? '8 colors, bold' : p === 'standard' ? '12 colors, balanced' : '24 colors, fine detail'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
                   {/* ── Dimensions ── */}
                   <div className="import-section-label">Dimensions</div>
                   <div className="import-row">
@@ -524,7 +714,7 @@ export function ImageImport() {
                     <input
                       type="range" min={2} max={40}
                       value={settings.colorCount}
-                      onChange={e => setSettings(s => ({ ...s, colorCount: Number(e.target.value) }))}
+                      onChange={e => setSettings(s => ({ ...s, colorCount: Number(e.target.value), preset: 'custom' }))}
                       className="import-slider"
                     />
                     <span className="import-slider-value">{settings.colorCount}</span>
@@ -533,7 +723,7 @@ export function ImageImport() {
                     <label>Dithering</label>
                     <select
                       value={settings.ditherMode}
-                      onChange={e => setSettings(s => ({ ...s, ditherMode: e.target.value as DitherMode }))}
+                      onChange={e => setSettings(s => ({ ...s, ditherMode: e.target.value as DitherMode, preset: 'custom' }))}
                       className="import-select"
                     >
                       <option value="none">None (crisp, best for needlepoint)</option>
@@ -546,7 +736,7 @@ export function ImageImport() {
                       <input
                         type="checkbox"
                         checked={settings.mergeSmallColors}
-                        onChange={e => setSettings(s => ({ ...s, mergeSmallColors: e.target.checked }))}
+                        onChange={e => setSettings(s => ({ ...s, mergeSmallColors: e.target.checked, preset: 'custom' }))}
                       />
                       Merge tiny color regions
                     </label>
@@ -559,17 +749,27 @@ export function ImageImport() {
                     <input
                       type="range" min={0} max={100}
                       value={settings.contrast}
-                      onChange={e => setSettings(s => ({ ...s, contrast: Number(e.target.value) }))}
+                      onChange={e => setSettings(s => ({ ...s, contrast: Number(e.target.value), preset: 'custom' }))}
                       className="import-slider"
                     />
                     <span className="import-slider-value">{settings.contrast}</span>
+                  </div>
+                  <div className="import-row">
+                    <label>Smoothing</label>
+                    <input
+                      type="range" min={0} max={100}
+                      value={settings.smoothing}
+                      onChange={e => setSettings(s => ({ ...s, smoothing: Number(e.target.value), preset: 'custom' }))}
+                      className="import-slider"
+                    />
+                    <span className="import-slider-value">{settings.smoothing}</span>
                   </div>
                   <div className="import-row">
                     <label>Sharpness</label>
                     <input
                       type="range" min={0} max={100}
                       value={settings.sharpness}
-                      onChange={e => setSettings(s => ({ ...s, sharpness: Number(e.target.value) }))}
+                      onChange={e => setSettings(s => ({ ...s, sharpness: Number(e.target.value), preset: 'custom' }))}
                       className="import-slider"
                     />
                     <span className="import-slider-value">{settings.sharpness}</span>
@@ -578,7 +778,7 @@ export function ImageImport() {
                     <label>Cleanup</label>
                     <select
                       value={settings.cleanup}
-                      onChange={e => setSettings(s => ({ ...s, cleanup: e.target.value as CleanupLevel }))}
+                      onChange={e => setSettings(s => ({ ...s, cleanup: e.target.value as CleanupLevel, preset: 'custom' }))}
                       className="import-select"
                     >
                       <option value="none">None</option>
@@ -640,7 +840,7 @@ export function ImageImport() {
                 </div>
 
                 <div className="import-actions">
-                  <button className="import-btn secondary" onClick={() => { setImageUrl(null); setResult(null); }}>
+                  <button className="import-btn secondary" onClick={() => { setImageUrl(null); setResult(null); setLivePreviewUrl(null); }}>
                     Choose Different Image
                   </button>
                   <button

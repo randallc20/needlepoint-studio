@@ -1,4 +1,5 @@
 import { findNearestDmcColor } from '../data/dmcColors';
+import { rgbToLab, type Lab } from './colorScience';
 import type { StitchCell } from '../types';
 
 export type DitherMode = 'none' | 'floyd-steinberg' | 'ordered';
@@ -6,41 +7,61 @@ export type CleanupLevel = 'none' | 'light' | 'medium' | 'heavy';
 
 export interface RgbPixel { r: number; g: number; b: number }
 
-// ─── K-Means++ Initialization ────────────────────────────────────────
+// ─── LAB pixel for perceptual clustering ─────────────────────────────
 
-function kMeansPlusPlusInit(pixels: RgbPixel[], k: number): RgbPixel[] {
-  const centroids: RgbPixel[] = [];
-  // Pick first centroid randomly from a center-biased sample
+interface LabPixel { l: number; a: number; b: number }
+
+function rgbToLabPixel(p: RgbPixel): LabPixel {
+  return rgbToLab(p.r, p.g, p.b);
+}
+
+function labDistance(a: LabPixel, b: LabPixel): number {
+  const dl = a.l - b.l;
+  const da = a.a - b.a;
+  const db = a.b - b.b;
+  return dl * dl + da * da + db * db;
+}
+
+function findNearestLabCentroid(pixel: LabPixel, centroids: LabPixel[]): number {
+  let minDist = Infinity;
+  let bestIdx = 0;
+  for (let i = 0; i < centroids.length; i++) {
+    const dist = labDistance(pixel, centroids[i]);
+    if (dist < minDist) { minDist = dist; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+// ─── K-Means++ Initialization in LAB space ───────────────────────────
+
+function kMeansPlusPlusInitLab(pixels: LabPixel[], k: number): LabPixel[] {
+  const centroids: LabPixel[] = [];
   centroids.push({ ...pixels[Math.floor(Math.random() * pixels.length)] });
 
   for (let i = 1; i < k; i++) {
-    // Compute distances to nearest existing centroid
     const distances: number[] = new Array(pixels.length);
     let totalDist = 0;
     for (let j = 0; j < pixels.length; j++) {
       let minDist = Infinity;
       for (const c of centroids) {
-        const dr = pixels[j].r - c.r;
-        const dg = pixels[j].g - c.g;
-        const db = pixels[j].b - c.b;
-        const dist = dr * dr + dg * dg + db * db;
+        const dist = labDistance(pixels[j], c);
         if (dist < minDist) minDist = dist;
       }
       distances[j] = minDist;
       totalDist += minDist;
     }
 
-    // Weighted random selection — pixels far from existing centroids more likely
     let target = Math.random() * totalDist;
+    let picked = false;
     for (let j = 0; j < pixels.length; j++) {
       target -= distances[j];
       if (target <= 0) {
         centroids.push({ ...pixels[j] });
+        picked = true;
         break;
       }
     }
-    // Fallback if rounding caused us to not pick
-    if (centroids.length <= i) {
+    if (!picked) {
       centroids.push({ ...pixels[Math.floor(Math.random() * pixels.length)] });
     }
   }
@@ -48,7 +69,70 @@ function kMeansPlusPlusInit(pixels: RgbPixel[], k: number): RgbPixel[] {
   return centroids;
 }
 
-// ─── K-Means Quantization ────────────────────────────────────────────
+// ─── K-Means Quantization in LAB space ───────────────────────────────
+
+function kMeansLab(labPixels: LabPixel[], k: number, maxIter = 30): LabPixel[] {
+  const centroids = kMeansPlusPlusInitLab(labPixels, k);
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    const sums = centroids.map(() => ({ l: 0, a: 0, b: 0, count: 0 }));
+
+    for (const p of labPixels) {
+      const bestIdx = findNearestLabCentroid(p, centroids);
+      sums[bestIdx].l += p.l;
+      sums[bestIdx].a += p.a;
+      sums[bestIdx].b += p.b;
+      sums[bestIdx].count++;
+    }
+
+    let converged = true;
+    for (let ci = 0; ci < centroids.length; ci++) {
+      if (sums[ci].count === 0) continue;
+      const newL = sums[ci].l / sums[ci].count;
+      const newA = sums[ci].a / sums[ci].count;
+      const newB = sums[ci].b / sums[ci].count;
+      if (Math.abs(centroids[ci].l - newL) > 0.1 ||
+          Math.abs(centroids[ci].a - newA) > 0.1 ||
+          Math.abs(centroids[ci].b - newB) > 0.1) {
+        converged = false;
+      }
+      centroids[ci] = { l: newL, a: newA, b: newB };
+    }
+    if (converged) break;
+  }
+
+  // Remove empty centroids
+  const used = new Set<number>();
+  for (const p of labPixels) {
+    used.add(findNearestLabCentroid(p, centroids));
+  }
+  return centroids.filter((_, i) => used.has(i));
+}
+
+/**
+ * Run k-means multiple times and return the best result (lowest total error).
+ */
+function kMeansLabBestOf(labPixels: LabPixel[], k: number, runs: number): LabPixel[] {
+  let bestCentroids: LabPixel[] = [];
+  let bestError = Infinity;
+
+  for (let r = 0; r < runs; r++) {
+    const centroids = kMeansLab(labPixels, k);
+    let totalError = 0;
+    for (const p of labPixels) {
+      const idx = findNearestLabCentroid(p, centroids);
+      totalError += labDistance(p, centroids[idx]);
+    }
+    if (totalError < bestError) {
+      bestError = totalError;
+      bestCentroids = centroids;
+    }
+  }
+
+  return bestCentroids;
+}
+
+// ─── Backwards-compatible RGB wrappers (used by old callers) ─────────
 
 export function findNearestCentroid(pixel: RgbPixel, centroids: RgbPixel[]): RgbPixel {
   let minDist = Infinity;
@@ -67,123 +151,168 @@ export function findNearestCentroid(pixel: RgbPixel, centroids: RgbPixel[]): Rgb
 }
 
 export function kMeansQuantize(pixels: RgbPixel[], k: number, maxIter = 30): RgbPixel[] {
-  // Use K-means++ for better initial centroids
-  const centroids = kMeansPlusPlusInit(pixels, k);
+  // Convert to LAB, run k-means, convert back
+  const labPixels = pixels.map(rgbToLabPixel);
+  const labCentroids = kMeansLab(labPixels, k, maxIter);
 
-  for (let iter = 0; iter < maxIter; iter++) {
-    const sums: { r: number; g: number; b: number; count: number }[] =
-      centroids.map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
-
-    for (const p of pixels) {
-      let minDist = Infinity;
-      let bestIdx = 0;
-      for (let ci = 0; ci < centroids.length; ci++) {
-        const c = centroids[ci];
-        const dr = p.r - c.r;
-        const dg = p.g - c.g;
-        const db = p.b - c.b;
-        const dist = dr * dr + dg * dg + db * db;
-        if (dist < minDist) { minDist = dist; bestIdx = ci; }
-      }
-      sums[bestIdx].r += p.r;
-      sums[bestIdx].g += p.g;
-      sums[bestIdx].b += p.b;
-      sums[bestIdx].count++;
-    }
-
-    let converged = true;
-    for (let ci = 0; ci < centroids.length; ci++) {
-      if (sums[ci].count === 0) continue;
-      const newR = Math.round(sums[ci].r / sums[ci].count);
-      const newG = Math.round(sums[ci].g / sums[ci].count);
-      const newB = Math.round(sums[ci].b / sums[ci].count);
-      if (centroids[ci].r !== newR || centroids[ci].g !== newG || centroids[ci].b !== newB) {
-        converged = false;
-      }
-      centroids[ci] = { r: newR, g: newG, b: newB };
-    }
-    if (converged) break;
+  // Map LAB centroids back to average RGB of assigned pixels
+  const rgbSums = labCentroids.map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
+  for (let i = 0; i < pixels.length; i++) {
+    const idx = findNearestLabCentroid(labPixels[i], labCentroids);
+    rgbSums[idx].r += pixels[i].r;
+    rgbSums[idx].g += pixels[i].g;
+    rgbSums[idx].b += pixels[i].b;
+    rgbSums[idx].count++;
   }
 
-  // Remove empty centroids (ones no pixel was assigned to)
-  return centroids.filter((_, i) => {
-    const sums = { count: 0 };
-    for (const p of pixels) {
-      const nearest = findNearestCentroid(p, centroids);
-      if (nearest === centroids[i]) sums.count++;
-    }
-    return true; // keep all — empty removal is rare and expensive to recheck
-  });
+  return rgbSums
+    .filter(s => s.count > 0)
+    .map(s => ({
+      r: Math.round(s.r / s.count),
+      g: Math.round(s.g / s.count),
+      b: Math.round(s.b / s.count),
+    }));
 }
 
-// ─── Pre-processing: Contrast Enhancement ───────────────────────────
+// ─── Main quantization: LAB-space with multi-run ─────────────────────
 
-export function enhanceContrast(pixels: RgbPixel[], strength: number): RgbPixel[] {
-  if (strength === 0) return pixels;
-
-  // Compute luminance histogram
-  const luminances = pixels.map(p => 0.299 * p.r + 0.587 * p.g + 0.114 * p.b);
-  const sorted = [...luminances].sort((a, b) => a - b);
-  const lo = sorted[Math.floor(sorted.length * 0.02)];
-  const hi = sorted[Math.floor(sorted.length * 0.98)];
-  const range = hi - lo || 1;
-
-  // Stretch contrast based on strength (0-1)
-  const factor = 1 + strength * 0.8;
-  const mid = (lo + hi) / 2;
-
-  return pixels.map(p => ({
-    r: Math.max(0, Math.min(255, Math.round(mid + (p.r - mid) * factor))),
-    g: Math.max(0, Math.min(255, Math.round(mid + (p.g - mid) * factor))),
-    b: Math.max(0, Math.min(255, Math.round(mid + (p.b - mid) * factor))),
-  }));
+export interface QuantizeResult {
+  /** Index of the centroid each pixel was assigned to */
+  assignments: number[];
+  /** LAB centroids */
+  centroids: LabPixel[];
+  /** Average RGB for each centroid */
+  centroidRgb: RgbPixel[];
 }
 
-// ─── Pre-processing: Sharpening (unsharp mask) ──────────────────────
-
-export function sharpenPixels(
+export function quantizePixels(
   pixels: RgbPixel[],
+  colorCount: number,
+  ditherMode: DitherMode,
   width: number,
   height: number,
-  strength: number,
-): RgbPixel[] {
-  if (strength === 0) return pixels;
+  runs = 3,
+): QuantizeResult {
+  const labPixels = pixels.map(rgbToLabPixel);
+  const centroids = kMeansLabBestOf(labPixels, colorCount, runs);
 
-  const result: RgbPixel[] = new Array(pixels.length);
-  const amount = strength * 1.5;
+  // Compute average RGB per centroid
+  const rgbSums = centroids.map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
+  for (let i = 0; i < pixels.length; i++) {
+    const idx = findNearestLabCentroid(labPixels[i], centroids);
+    rgbSums[idx].r += pixels[i].r;
+    rgbSums[idx].g += pixels[i].g;
+    rgbSums[idx].b += pixels[i].b;
+    rgbSums[idx].count++;
+  }
+  const centroidRgb = rgbSums.map(s =>
+    s.count > 0
+      ? { r: Math.round(s.r / s.count), g: Math.round(s.g / s.count), b: Math.round(s.b / s.count) }
+      : { r: 0, g: 0, b: 0 }
+  );
+
+  // Assign pixels — with optional dithering
+  let assignments: number[];
+
+  if (ditherMode === 'none') {
+    assignments = labPixels.map(p => findNearestLabCentroid(p, centroids));
+  } else if (ditherMode === 'floyd-steinberg') {
+    assignments = floydSteinbergDitherLab(labPixels, centroids, width, height);
+  } else {
+    assignments = orderedDitherLab(labPixels, centroids, width, height);
+  }
+
+  return { assignments, centroids, centroidRgb };
+}
+
+// ─── Floyd-Steinberg Dithering in LAB space ──────────────────────────
+
+function floydSteinbergDitherLab(
+  pixels: LabPixel[],
+  centroids: LabPixel[],
+  width: number,
+  height: number,
+): number[] {
+  const buf = pixels.map(p => ({ l: p.l, a: p.a, b: p.b }));
+  const result = new Array<number>(pixels.length);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
-      const p = pixels[idx];
+      const old = buf[idx];
+      const bestIdx = findNearestLabCentroid(old, centroids);
+      result[idx] = bestIdx;
 
-      if (x === 0 || x === width - 1 || y === 0 || y === height - 1) {
-        result[idx] = { ...p };
-        continue;
-      }
+      const nearest = centroids[bestIdx];
+      const errL = old.l - nearest.l;
+      const errA = old.a - nearest.a;
+      const errB = old.b - nearest.b;
 
-      // 3x3 kernel: center minus neighbors (Laplacian sharpening)
-      const top = pixels[(y - 1) * width + x];
-      const bot = pixels[(y + 1) * width + x];
-      const left = pixels[y * width + (x - 1)];
-      const right = pixels[y * width + (x + 1)];
-
-      const avgR = (top.r + bot.r + left.r + right.r) / 4;
-      const avgG = (top.g + bot.g + left.g + right.g) / 4;
-      const avgB = (top.b + bot.b + left.b + right.b) / 4;
-
-      result[idx] = {
-        r: Math.max(0, Math.min(255, Math.round(p.r + amount * (p.r - avgR)))),
-        g: Math.max(0, Math.min(255, Math.round(p.g + amount * (p.g - avgG)))),
-        b: Math.max(0, Math.min(255, Math.round(p.b + amount * (p.b - avgB)))),
+      const spread = (i: number, factor: number) => {
+        if (i >= 0 && i < buf.length) {
+          buf[i].l += errL * factor;
+          buf[i].a += errA * factor;
+          buf[i].b += errB * factor;
+        }
       };
+
+      if (x + 1 < width) spread(idx + 1, 7 / 16);
+      if (y + 1 < height) {
+        if (x > 0) spread(idx + width - 1, 3 / 16);
+        spread(idx + width, 5 / 16);
+        if (x + 1 < width) spread(idx + width + 1, 1 / 16);
+      }
     }
   }
 
   return result;
 }
 
-// ─── Floyd-Steinberg Dithering ───────────────────────────────────────
+// ─── Ordered (Bayer 4×4) Dithering in LAB space ─────────────────────
+
+const BAYER_4X4 = [
+  [ 0,  8,  2, 10],
+  [12,  4, 14,  6],
+  [ 3, 11,  1,  9],
+  [15,  7, 13,  5],
+];
+
+function orderedDitherLab(
+  pixels: LabPixel[],
+  centroids: LabPixel[],
+  width: number,
+  height: number,
+): number[] {
+  // Compute spread based on centroid distances in LAB
+  let maxDist = 0;
+  for (let i = 0; i < centroids.length; i++) {
+    for (let j = i + 1; j < centroids.length; j++) {
+      const d = Math.sqrt(labDistance(centroids[i], centroids[j]));
+      if (d > maxDist) maxDist = d;
+    }
+  }
+  const spread = Math.max(4, maxDist * 0.2);
+
+  const result = new Array<number>(pixels.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const p = pixels[idx];
+      const threshold = (BAYER_4X4[y % 4][x % 4] / 16) - 0.5;
+
+      const adjusted: LabPixel = {
+        l: p.l + threshold * spread,
+        a: p.a + threshold * spread * 0.5,
+        b: p.b + threshold * spread * 0.5,
+      };
+      result[idx] = findNearestLabCentroid(adjusted, centroids);
+    }
+  }
+
+  return result;
+}
+
+// ─── RGB-space dithering (kept for backward compat) ──────────────────
 
 export function floydSteinbergDither(
   pixels: RgbPixel[],
@@ -191,7 +320,7 @@ export function floydSteinbergDither(
   width: number,
   height: number,
 ): RgbPixel[] {
-  const buf: { r: number; g: number; b: number }[] = pixels.map(p => ({ ...p }));
+  const buf = pixels.map(p => ({ ...p }));
   const result: RgbPixel[] = new Array(pixels.length);
 
   for (let y = 0; y < height; y++) {
@@ -230,15 +359,6 @@ export function floydSteinbergDither(
   return result;
 }
 
-// ─── Ordered (Bayer 4×4) Dithering ──────────────────────────────────
-
-const BAYER_4X4 = [
-  [ 0,  8,  2, 10],
-  [12,  4, 14,  6],
-  [ 3, 11,  1,  9],
-  [15,  7, 13,  5],
-];
-
 export function orderedDither(
   pixels: RgbPixel[],
   centroids: RgbPixel[],
@@ -262,7 +382,6 @@ export function orderedDither(
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
       const p = pixels[idx];
-
       const threshold = (BAYER_4X4[y % 4][x % 4] / 16) - 0.5;
 
       const adjusted: RgbPixel = {
@@ -278,18 +397,145 @@ export function orderedDither(
   return result;
 }
 
-// ─── Post-processing: Denoise / Cleanup ─────────────────────────────
+// ─── Pre-processing: Contrast Enhancement ───────────────────────────
+
+export function enhanceContrast(pixels: RgbPixel[], strength: number): RgbPixel[] {
+  if (strength === 0) return pixels;
+
+  const luminances = pixels.map(p => 0.299 * p.r + 0.587 * p.g + 0.114 * p.b);
+  const sorted = [...luminances].sort((a, b) => a - b);
+  const lo = sorted[Math.floor(sorted.length * 0.02)];
+  const hi = sorted[Math.floor(sorted.length * 0.98)];
+  const mid = (lo + hi) / 2;
+  const factor = 1 + strength * 0.8;
+
+  return pixels.map(p => ({
+    r: Math.max(0, Math.min(255, Math.round(mid + (p.r - mid) * factor))),
+    g: Math.max(0, Math.min(255, Math.round(mid + (p.g - mid) * factor))),
+    b: Math.max(0, Math.min(255, Math.round(mid + (p.b - mid) * factor))),
+  }));
+}
+
+// ─── Pre-processing: Sharpening (unsharp mask) ──────────────────────
+
+export function sharpenPixels(
+  pixels: RgbPixel[],
+  width: number,
+  height: number,
+  strength: number,
+): RgbPixel[] {
+  if (strength === 0) return pixels;
+
+  const result: RgbPixel[] = new Array(pixels.length);
+  const amount = strength * 1.5;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const p = pixels[idx];
+
+      if (x === 0 || x === width - 1 || y === 0 || y === height - 1) {
+        result[idx] = { ...p };
+        continue;
+      }
+
+      const top = pixels[(y - 1) * width + x];
+      const bot = pixels[(y + 1) * width + x];
+      const left = pixels[y * width + (x - 1)];
+      const right = pixels[y * width + (x + 1)];
+
+      const avgR = (top.r + bot.r + left.r + right.r) / 4;
+      const avgG = (top.g + bot.g + left.g + right.g) / 4;
+      const avgB = (top.b + bot.b + left.b + right.b) / 4;
+
+      result[idx] = {
+        r: Math.max(0, Math.min(255, Math.round(p.r + amount * (p.r - avgR)))),
+        g: Math.max(0, Math.min(255, Math.round(p.g + amount * (p.g - avgG)))),
+        b: Math.max(0, Math.min(255, Math.round(p.b + amount * (p.b - avgB)))),
+      };
+    }
+  }
+
+  return result;
+}
+
+// ─── Pre-processing: Bilateral Filter (edge-preserving smoothing) ───
 
 /**
- * Remove isolated stitches and small regions that create noise.
- * Replaces them with the dominant neighboring color.
+ * Bilateral filter: smooths flat color regions while preserving sharp edges.
+ * This is the key to getting clean, painterly regions in needlepoint patterns.
  *
- * - light:  remove single isolated stitches (1px)
- * - medium: remove regions <= 2 stitches + smooth jagged edges
- * - heavy:  remove regions <= 4 stitches + aggressive smoothing
+ * @param strength 0-1: 0 = no smoothing, 1 = maximum smoothing
  */
+export function bilateralFilter(
+  pixels: RgbPixel[],
+  width: number,
+  height: number,
+  strength: number,
+): RgbPixel[] {
+  if (strength === 0) return pixels;
+
+  const result: RgbPixel[] = new Array(pixels.length);
+
+  // Spatial sigma scales with strength (radius of influence)
+  const sigmaSpatial = 1 + strength * 2;    // 1-3 pixel radius
+  const sigmaColor = 20 + strength * 40;     // color similarity threshold
+
+  const spatialDenom = 2 * sigmaSpatial * sigmaSpatial;
+  const colorDenom = 2 * sigmaColor * sigmaColor;
+
+  // Kernel radius
+  const radius = Math.ceil(sigmaSpatial * 2);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const center = pixels[idx];
+
+      let sumR = 0, sumG = 0, sumB = 0, sumW = 0;
+
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const ny = y + dy;
+          const nx = x + dx;
+          if (ny < 0 || ny >= height || nx < 0 || nx >= width) continue;
+
+          const neighbor = pixels[ny * width + nx];
+
+          // Spatial weight (distance from center)
+          const spatialDist = dx * dx + dy * dy;
+          const spatialWeight = Math.exp(-spatialDist / spatialDenom);
+
+          // Color weight (color difference from center)
+          const dr = center.r - neighbor.r;
+          const dg = center.g - neighbor.g;
+          const db = center.b - neighbor.b;
+          const colorDist = dr * dr + dg * dg + db * db;
+          const colorWeight = Math.exp(-colorDist / colorDenom);
+
+          const w = spatialWeight * colorWeight;
+          sumR += neighbor.r * w;
+          sumG += neighbor.g * w;
+          sumB += neighbor.b * w;
+          sumW += w;
+        }
+      }
+
+      result[idx] = {
+        r: Math.max(0, Math.min(255, Math.round(sumR / sumW))),
+        g: Math.max(0, Math.min(255, Math.round(sumG / sumW))),
+        b: Math.max(0, Math.min(255, Math.round(sumB / sumW))),
+      };
+    }
+  }
+
+  return result;
+}
+
+// ─── Post-processing: Denoise / Cleanup ─────────────────────────────
+
 export function cleanupPattern(
-  dmcGrid: string[][],  // 2D grid of DMC numbers
+  dmcGrid: string[][],
   width: number,
   height: number,
   level: CleanupLevel,
@@ -301,14 +547,12 @@ export function cleanupPattern(
   const passes = level === 'heavy' ? 3 : level === 'medium' ? 2 : 1;
 
   for (let pass = 0; pass < passes; pass++) {
-    // Find and remove small regions
     const visited = Array.from({ length: height }, () => new Array(width).fill(false));
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         if (visited[y][x]) continue;
 
-        // Flood fill to find connected region of same color
         const color = grid[y][x];
         const region: [number, number][] = [];
         const queue: [number, number][] = [[y, x]];
@@ -329,7 +573,6 @@ export function cleanupPattern(
           }
         }
 
-        // If region is small enough, replace with dominant neighbor color
         if (region.length <= maxRegionSize) {
           const neighborCounts = new Map<string, number>();
           for (const [ry, rx] of region) {
@@ -347,7 +590,6 @@ export function cleanupPattern(
           }
 
           if (neighborCounts.size > 0) {
-            // Pick the most common neighbor color
             let bestColor = color;
             let bestCount = 0;
             for (const [nc, count] of neighborCounts) {
@@ -364,20 +606,18 @@ export function cleanupPattern(
       }
     }
 
-    // Majority filter pass: smooth jagged edges
+    // Majority filter: smooth jagged edges
     if (level !== 'light') {
       const smoothed = grid.map(row => [...row]);
       for (let y = 1; y < height - 1; y++) {
         for (let x = 1; x < width - 1; x++) {
           const counts = new Map<string, number>();
-          // 3x3 neighborhood
           for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
               const c = grid[y + dy][x + dx];
               counts.set(c, (counts.get(c) || 0) + 1);
             }
           }
-          // If current color is minority in neighborhood, replace
           const currentCount = counts.get(grid[y][x]) || 0;
           if (currentCount <= 2) {
             let bestColor = grid[y][x];
@@ -392,7 +632,6 @@ export function cleanupPattern(
           }
         }
       }
-      // Copy smoothed back
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
           grid[y][x] = smoothed[y][x];
@@ -417,7 +656,6 @@ export function mergeSimilarColors(
 
   const grid = dmcGrid.map(row => [...row]);
 
-  // Count occurrences
   const counts = new Map<string, number>();
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -426,11 +664,9 @@ export function mergeSimilarColors(
     }
   }
 
-  // Find colors below threshold and merge into nearest neighbor
   for (const [color, count] of counts) {
     if (count >= minCount) continue;
 
-    // Find what this color borders most
     const neighborCounts = new Map<string, number>();
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -455,7 +691,6 @@ export function mergeSimilarColors(
       for (const [nc, cnt] of neighborCounts) {
         if (cnt > bestCount) { bestCount = cnt; bestColor = nc; }
       }
-      // Replace all instances
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
           if (grid[y][x] === color) grid[y][x] = bestColor;
@@ -467,7 +702,7 @@ export function mergeSimilarColors(
   return grid;
 }
 
-// ─── High-level conversion helper ────────────────────────────────────
+// ─── High-level conversion helper (legacy) ──────────────────────────
 
 export async function convertImageToStitchCells(
   imageUrl: string,
@@ -498,35 +733,23 @@ export async function convertImageToStitchCells(
     pixels.push({ r: imageData.data[i], g: imageData.data[i + 1], b: imageData.data[i + 2] });
   }
 
-  const centroids = kMeansQuantize(pixels, colorCount);
-
-  let quantized: RgbPixel[];
-  switch (ditherMode) {
-    case 'floyd-steinberg':
-      quantized = floydSteinbergDither(pixels, centroids, targetWidth, targetHeight);
-      break;
-    case 'ordered':
-      quantized = orderedDither(pixels, centroids, targetWidth, targetHeight);
-      break;
-    default:
-      quantized = pixels.map(p => findNearestCentroid(p, centroids));
-  }
+  const qResult = quantizePixels(pixels, colorCount, ditherMode, targetWidth, targetHeight);
 
   const cells: Record<string, StitchCell> = {};
-  const centroidToDmc = new Map<string, { hex: string; dmcNumber: string }>();
+  const centroidToDmc = new Map<number, { hex: string; dmcNumber: string }>();
 
   for (let y = 0; y < targetHeight; y++) {
     for (let x = 0; x < targetWidth; x++) {
       const idx = y * targetWidth + x;
-      const qColor = quantized[idx];
-      const cKey = `${qColor.r},${qColor.g},${qColor.b}`;
+      const ci = qResult.assignments[idx];
 
-      if (!centroidToDmc.has(cKey)) {
-        const match = findNearestDmcColor(qColor.r, qColor.g, qColor.b);
-        centroidToDmc.set(cKey, { hex: match.color.hex, dmcNumber: match.color.number });
+      if (!centroidToDmc.has(ci)) {
+        const rgb = qResult.centroidRgb[ci];
+        const match = findNearestDmcColor(rgb.r, rgb.g, rgb.b);
+        centroidToDmc.set(ci, { hex: match.color.hex, dmcNumber: match.color.number });
       }
 
-      const { hex, dmcNumber } = centroidToDmc.get(cKey)!;
+      const { hex, dmcNumber } = centroidToDmc.get(ci)!;
       cells[`${y},${x}`] = {
         color: hex,
         dmcNumber,
