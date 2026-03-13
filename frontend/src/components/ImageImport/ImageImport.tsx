@@ -20,6 +20,8 @@ interface ConvertSettings {
   ditherMode: DitherMode;
   lockAspect: boolean;
   restrictToPalette: boolean;
+  bgColor: string;        // hex color to fill behind transparent images
+  bgEnabled: boolean;     // whether to apply bgColor
 }
 
 /** One unique color mapping produced during conversion */
@@ -58,6 +60,8 @@ export function ImageImport() {
     ditherMode: 'floyd-steinberg',
     lockAspect: true,
     restrictToPalette: false,
+    bgColor: '#ffffff',
+    bgEnabled: true,
   });
   const [converting, setConverting] = useState(false);
   const [result, setResult] = useState<ConvertResult | null>(null);
@@ -193,6 +197,13 @@ export function ImageImport() {
       canvas.width = settings.targetWidth;
       canvas.height = settings.targetHeight;
       const ctx = canvas.getContext('2d')!;
+
+      // Fill background color first (handles transparent images)
+      if (settings.bgEnabled) {
+        ctx.fillStyle = settings.bgColor;
+        ctx.fillRect(0, 0, settings.targetWidth, settings.targetHeight);
+      }
+
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, settings.targetWidth, settings.targetHeight);
@@ -476,6 +487,38 @@ export function ImageImport() {
                       <option value="ordered">Ordered (Bayer 4x4)</option>
                     </select>
                   </div>
+                  <div className="import-row">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={settings.bgEnabled}
+                        onChange={e => setSettings(s => ({ ...s, bgEnabled: e.target.checked }))}
+                      />
+                      Background color (for transparent images)
+                    </label>
+                  </div>
+                  {settings.bgEnabled && (
+                    <div className="import-row import-bg-row">
+                      <div className="import-bg-presets">
+                        {['#ffffff', '#000000', '#f5f0e6', '#c8dbbe', '#fadadd', '#d4e4f7'].map(c => (
+                          <button
+                            key={c}
+                            className={`import-bg-swatch ${settings.bgColor === c ? 'active' : ''}`}
+                            style={{ backgroundColor: c }}
+                            onClick={() => setSettings(s => ({ ...s, bgColor: c }))}
+                            title={c}
+                          />
+                        ))}
+                        <input
+                          type="color"
+                          value={settings.bgColor}
+                          onChange={e => setSettings(s => ({ ...s, bgColor: e.target.value }))}
+                          className="import-bg-picker"
+                          title="Custom color"
+                        />
+                      </div>
+                    </div>
+                  )}
                   <div className="import-row">
                     <label>
                       <input

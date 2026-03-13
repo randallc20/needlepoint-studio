@@ -92,17 +92,31 @@ export interface CellRect {
   maxCol: number;
 }
 
+export interface TextMeta {
+  text: string;
+  fontFamily: string;
+  fontIdx: number;
+  sizePx: number;
+  curve: number;
+  rotation: 0 | 90 | 180 | 270;
+  hexColor: string;
+  dmcNumber: string | null;
+}
+
 export interface CellGroup {
   id: string;
   name: string;
   layerId: string;
   cellKeys: Set<string>;
+  locked: boolean;
+  textMeta?: TextMeta;
 }
 
 export interface ClipboardData {
   cells: Record<string, StitchCell>;
   width: number;
   height: number;
+  groups?: { cellKeys: string[] }[];
 }
 
 export interface SavedStamp {

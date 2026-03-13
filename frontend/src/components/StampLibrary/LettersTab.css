@@ -124,6 +124,21 @@
   border-color: #3b82f6;
 }
 
+/* ── Slider ── */
+.letters-slider {
+  flex: 1;
+  accent-color: #3b82f6;
+  cursor: pointer;
+  height: 4px;
+}
+
+.letters-size-value {
+  font-size: 11px;
+  color: #cbd5e1;
+  min-width: 28px;
+  text-align: right;
+}
+
 /* ── Color info ── */
 .letters-color-info {
   display: flex;
@@ -146,6 +161,44 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Orientation buttons ── */
+.letters-orient-group {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+}
+
+.letters-orient-btn {
+  flex: 1;
+  padding: 4px 0;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #64748b;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.letters-orient-btn:hover {
+  color: #cbd5e1;
+  background: #334155;
+}
+
+.letters-orient-btn.active {
+  background: #1e3a5f;
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+
+.letters-orient-arrow {
+  display: inline-block;
+  line-height: 1;
 }
 
 /* ── Phrase input ── */
@@ -214,6 +267,39 @@
 .letters-add-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ── Edit actions ── */
+.letters-edit-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.letters-update-btn {
+  flex: 2;
+}
+
+.letters-cancel-btn {
+  flex: 1;
+  background: #1e293b !important;
+  border-color: #475569 !important;
+  color: #94a3b8 !important;
+}
+
+.letters-cancel-btn:hover {
+  background: #334155 !important;
+  color: #cbd5e1 !important;
+}
+
+/* ── Editing indicator ── */
+.letters-editing-banner {
+  padding: 6px 10px;
+  background: #1e3a5f;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #93c5fd;
+  text-align: center;
 }
 
 /* ── Toast ── */

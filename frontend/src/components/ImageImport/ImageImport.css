@@ -192,6 +192,58 @@
   border-color: #3b82f6;
 }
 
+/* ─── Background color presets ─────────────────────────────────── */
+
+.import-bg-row {
+  justify-content: flex-start;
+  padding-left: 20px;
+}
+
+.import-bg-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.import-bg-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 2px solid #334155;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+  padding: 0;
+}
+
+.import-bg-swatch:hover {
+  border-color: #94a3b8;
+  transform: scale(1.1);
+}
+
+.import-bg-swatch.active {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.import-bg-picker {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 2px solid #334155;
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+}
+
+.import-bg-picker::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.import-bg-picker::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
 .import-palette-warning {
   font-size: 12px;
   color: #eab308;

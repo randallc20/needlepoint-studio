@@ -59,9 +59,25 @@ export function Toolbar() {
   const pasteClipboard = useCanvasStore(s => s.pasteClipboard);
   const clipboard = useCanvasStore(s => s.clipboard);
   const config = useCanvasStore(s => s.config);
+  const groups = useCanvasStore(s => s.groups);
+  const toggleGroupLock = useCanvasStore(s => s.toggleGroupLock);
+  const activeLayerId = useCanvasStore(s => s.activeLayerId);
 
   const showShapeOptions = activeTool === 'rectangle' || activeTool === 'ellipse';
   const hasSelection = selection && selection.size > 0;
+
+  // Find group for current selection (if all selected cells belong to one group)
+  const selectedGroupId = (() => {
+    if (!hasSelection) return null;
+    for (const [id, group] of Object.entries(groups)) {
+      if (group.layerId !== activeLayerId) continue;
+      const allIn = [...selection!].every(k => group.cellKeys.has(k));
+      const sameSize = group.cellKeys.size === selection!.size;
+      if (allIn && sameSize) return id;
+    }
+    return null;
+  })();
+  const selectedGroup = selectedGroupId ? groups[selectedGroupId] : null;
 
   return (
     <div className="toolbar">
@@ -133,6 +149,15 @@ export function Toolbar() {
                 <button className="tool-btn" onClick={ungroupSelection} title="Ungroup (Ctrl+Shift+G)">
                   ✂ Ungroup
                 </button>
+                {selectedGroup && (
+                  <button
+                    className={`tool-btn ${selectedGroup.locked ? 'active' : ''}`}
+                    onClick={() => toggleGroupLock(selectedGroupId!)}
+                    title={selectedGroup.locked ? 'Unlock Group' : 'Lock Group'}
+                  >
+                    {selectedGroup.locked ? '🔒 Locked' : '🔓 Lock'}
+                  </button>
+                )}
                 <button className="tool-btn" onClick={clearSelection} title="Deselect (Esc)">
                   ✕ Deselect
                 </button>

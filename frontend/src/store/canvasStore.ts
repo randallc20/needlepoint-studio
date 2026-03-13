@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { enableMapSet } from 'immer';
-import type { CanvasConfig, Layer, StitchCell, StitchType, Tool, DmcColor, CellRect, CellGroup, ClipboardData } from '../types';
+import type { CanvasConfig, Layer, StitchCell, StitchType, Tool, DmcColor, CellRect, CellGroup, ClipboardData, TextMeta } from '../types';
 import type { ViewMode } from '../data/symbolSet';
 
 enableMapSet();
@@ -25,6 +25,7 @@ function defaultLayer(name = 'Layer 1'): Layer {
 interface HistoryEntry {
   layers: Layer[];
   activeLayerId: string;
+  groups: Record<string, SerializedGroup>;
 }
 
 interface CanvasState {
@@ -66,6 +67,10 @@ interface CanvasState {
   groupSelection: () => void;
   ungroupSelection: () => void;
   findGroupForCell: (cellKey: string) => string | null;
+  toggleGroupLock: (groupId: string) => void;
+  renameGroup: (groupId: string, name: string) => void;
+  setGroupTextMeta: (groupId: string, meta: TextMeta) => void;
+  replaceGroupCells: (groupId: string, newCells: Record<string, StitchCell>, newWidth: number, newHeight: number) => void;
 
   setConfig: (config: Partial<CanvasConfig>) => void;
   setTool: (tool: Tool) => void;
@@ -102,6 +107,26 @@ interface CanvasState {
 
 function deepCopyLayers(layers: Layer[]): Layer[] {
   return layers.map(l => ({ ...l, cells: { ...l.cells } }));
+}
+
+interface SerializedGroup {
+  id: string; name: string; layerId: string; cellKeys: string[]; locked: boolean; textMeta?: TextMeta;
+}
+
+function serializeGroups(groups: Record<string, CellGroup>) {
+  const out: Record<string, SerializedGroup> = {};
+  for (const [id, g] of Object.entries(groups)) {
+    out[id] = { id: g.id, name: g.name, layerId: g.layerId, cellKeys: [...g.cellKeys], locked: g.locked, textMeta: g.textMeta };
+  }
+  return out;
+}
+
+function deserializeGroups(data: Record<string, SerializedGroup>): Record<string, CellGroup> {
+  const out: Record<string, CellGroup> = {};
+  for (const [id, g] of Object.entries(data)) {
+    out[id] = { id: g.id, name: g.name, layerId: g.layerId, cellKeys: new Set(g.cellKeys), locked: g.locked, textMeta: g.textMeta };
+  }
+  return out;
 }
 
 const initialLayer = defaultLayer();
@@ -161,6 +186,7 @@ export const useCanvasStore = create<CanvasState>()(
       const entry: HistoryEntry = {
         layers: deepCopyLayers(s.layers as Layer[]),
         activeLayerId: s.activeLayerId,
+        groups: serializeGroups(s.groups as Record<string, CellGroup>),
       };
       s.past = [...s.past.slice(-UNDO_LIMIT + 1), entry];
       s.future = [];
@@ -172,22 +198,15 @@ export const useCanvasStore = create<CanvasState>()(
       const current: HistoryEntry = {
         layers: deepCopyLayers(s.layers as Layer[]),
         activeLayerId: s.activeLayerId,
+        groups: serializeGroups(s.groups as Record<string, CellGroup>),
       };
       s.future = [current, ...s.future];
       s.past = s.past.slice(0, -1);
       s.layers = prev.layers;
       s.activeLayerId = prev.activeLayerId;
-      // Clear selection and prune stale groups to avoid afterimages
+      s.groups = deserializeGroups(prev.groups) as any;
       s.selection = null;
       s.selectionBounds = null;
-      const activeCells = new Set<string>();
-      for (const layer of s.layers) {
-        for (const key of Object.keys(layer.cells)) activeCells.add(key);
-      }
-      for (const [id, group] of Object.entries(s.groups)) {
-        const alive = [...group.cellKeys].some(k => activeCells.has(k));
-        if (!alive) delete s.groups[id];
-      }
     }),
 
     redo: () => set(s => {
@@ -196,30 +215,29 @@ export const useCanvasStore = create<CanvasState>()(
       const current: HistoryEntry = {
         layers: deepCopyLayers(s.layers as Layer[]),
         activeLayerId: s.activeLayerId,
+        groups: serializeGroups(s.groups as Record<string, CellGroup>),
       };
       s.past = [...s.past, current];
       s.future = s.future.slice(1);
       s.layers = next.layers;
       s.activeLayerId = next.activeLayerId;
-      // Clear selection and prune stale groups
+      s.groups = deserializeGroups(next.groups) as any;
       s.selection = null;
       s.selectionBounds = null;
-      const activeCells = new Set<string>();
-      for (const layer of s.layers) {
-        for (const key of Object.keys(layer.cells)) activeCells.add(key);
-      }
-      for (const [id, group] of Object.entries(s.groups)) {
-        const alive = [...group.cellKeys].some(k => activeCells.has(k));
-        if (!alive) delete s.groups[id];
-      }
     }),
 
     paintCell: (row, col) => {
+      const key = `${row},${col}`;
+      // Skip if cell belongs to a locked group
+      const s0 = get();
+      for (const group of Object.values(s0.groups)) {
+        if (group.locked && group.layerId === s0.activeLayerId && group.cellKeys.has(key)) return;
+      }
       get().snapshot();
       set(s => {
         const layer = s.layers.find(l => l.id === s.activeLayerId);
         if (!layer) return;
-        layer.cells[`${row},${col}`] = {
+        layer.cells[key] = {
           color: s.activeColor,
           dmcNumber: s.activeDmcNumber,
           stitchType: s.activeStitchType,
@@ -235,7 +253,14 @@ export const useCanvasStore = create<CanvasState>()(
         if (!layer) return;
         for (const [row, col] of cells) {
           if (row >= 0 && row < s.config.height && col >= 0 && col < s.config.width) {
-            layer.cells[`${row},${col}`] = {
+            const key = `${row},${col}`;
+            // Skip locked group cells
+            let locked = false;
+            for (const group of Object.values(s.groups)) {
+              if (group.locked && group.layerId === s.activeLayerId && group.cellKeys.has(key)) { locked = true; break; }
+            }
+            if (locked) continue;
+            layer.cells[key] = {
               color: s.activeColor,
               dmcNumber: s.activeDmcNumber,
               stitchType: s.activeStitchType,
@@ -246,11 +271,16 @@ export const useCanvasStore = create<CanvasState>()(
     },
 
     eraseCell: (row, col) => {
+      const key = `${row},${col}`;
+      const s0 = get();
+      for (const group of Object.values(s0.groups)) {
+        if (group.locked && group.layerId === s0.activeLayerId && group.cellKeys.has(key)) return;
+      }
       get().snapshot();
       set(s => {
         const layer = s.layers.find(l => l.id === s.activeLayerId);
         if (!layer) return;
-        delete layer.cells[`${row},${col}`];
+        delete layer.cells[key];
       });
     },
 
@@ -261,7 +291,13 @@ export const useCanvasStore = create<CanvasState>()(
         const layer = s.layers.find(l => l.id === s.activeLayerId);
         if (!layer) return;
         for (const [row, col] of cells) {
-          delete layer.cells[`${row},${col}`];
+          const key = `${row},${col}`;
+          let locked = false;
+          for (const group of Object.values(s.groups)) {
+            if (group.locked && group.layerId === s.activeLayerId && group.cellKeys.has(key)) { locked = true; break; }
+          }
+          if (locked) continue;
+          delete layer.cells[key];
         }
       });
     },
@@ -279,6 +315,14 @@ export const useCanvasStore = create<CanvasState>()(
 
         if (targetColor === fillColor) return;
 
+        // Build locked cell set
+        const lockedKeys = new Set<string>();
+        for (const group of Object.values(s.groups)) {
+          if (group.locked && group.layerId === s.activeLayerId) {
+            for (const k of group.cellKeys) lockedKeys.add(k);
+          }
+        }
+
         const queue: [number, number][] = [[row, col]];
         const visited = new Set<string>();
 
@@ -287,6 +331,7 @@ export const useCanvasStore = create<CanvasState>()(
           const k = `${r},${c}`;
           if (visited.has(k)) continue;
           if (r < 0 || r >= height || c < 0 || c >= width) continue;
+          if (lockedKeys.has(k)) continue;
 
           const cell = layer.cells[k];
           const cellColor = cell?.color ?? null;
@@ -524,11 +569,22 @@ export const useCanvasStore = create<CanvasState>()(
       set(s => {
         const layer = s.layers.find(l => l.id === s.activeLayerId);
         if (!layer || !s.selection) return;
-        for (const key of s.selection) delete layer.cells[key];
-        // Remove deleted keys from groups, clean up empty groups
+        // Collect locked cell keys to skip
+        const lockedKeys = new Set<string>();
+        for (const group of Object.values(s.groups)) {
+          if (group.locked && group.layerId === s.activeLayerId) {
+            for (const k of group.cellKeys) lockedKeys.add(k);
+          }
+        }
+        for (const key of s.selection) {
+          if (lockedKeys.has(key)) continue;
+          delete layer.cells[key];
+        }
+        // Remove deleted keys from unlocked groups, clean up empty groups
         const emptyGroupIds: string[] = [];
         for (const [id, group] of Object.entries(s.groups)) {
           if (group.layerId !== s.activeLayerId) continue;
+          if (group.locked) continue;
           for (const key of s.selection!) group.cellKeys.delete(key);
           if (group.cellKeys.size === 0) emptyGroupIds.push(id);
         }
@@ -557,7 +613,19 @@ export const useCanvasStore = create<CanvasState>()(
         const [r, c] = key.split(',').map(Number);
         cells[`${r - minRow},${c - minCol}`] = { ...cell };
       }
-      s.clipboard = { cells, width: maxCol - minCol + 1, height: maxRow - minRow + 1 };
+      // Capture groups fully contained in selection
+      const clipGroups: { cellKeys: string[] }[] = [];
+      for (const group of Object.values(s.groups)) {
+        if (group.layerId !== s.activeLayerId) continue;
+        const allInSelection = [...group.cellKeys].every(k => s.selection!.has(k));
+        if (!allInSelection) continue;
+        const relativeKeys = [...group.cellKeys].map(k => {
+          const [r, c] = k.split(',').map(Number);
+          return `${r - minRow},${c - minCol}`;
+        });
+        clipGroups.push({ cellKeys: relativeKeys });
+      }
+      s.clipboard = { cells, width: maxCol - minCol + 1, height: maxRow - minRow + 1, groups: clipGroups.length > 0 ? clipGroups : undefined };
     }),
 
     pasteClipboard: (atRow, atCol) => {
@@ -578,6 +646,22 @@ export const useCanvasStore = create<CanvasState>()(
             newSelection.add(destKey);
           }
         }
+        // Recreate groups from clipboard
+        if (s.clipboard.groups) {
+          for (const cg of s.clipboard.groups) {
+            const destKeys = new Set<string>();
+            for (const relKey of cg.cellKeys) {
+              const [r, c] = relKey.split(',').map(Number);
+              const dk = `${atRow + r},${atCol + c}`;
+              if (newSelection.has(dk)) destKeys.add(dk);
+            }
+            if (destKeys.size > 0) {
+              const gid = `group-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+              s.groupCounter += 1;
+              s.groups[gid] = { id: gid, name: `Group ${s.groupCounter}`, layerId: s.activeLayerId, cellKeys: destKeys, locked: false };
+            }
+          }
+        }
         s.selection = newSelection.size > 0 ? newSelection : null;
         if (newSelection.size > 0) {
           let minR = Infinity, minC = Infinity, maxR = -Infinity, maxC = -Infinity;
@@ -591,29 +675,44 @@ export const useCanvasStore = create<CanvasState>()(
       });
     },
 
-    groupSelection: () => set(s => {
-      if (!s.selection || s.selection.size === 0) return;
-      const id = `group-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      s.groupCounter += 1;
-      s.groups[id] = {
-        id,
-        name: `Group ${s.groupCounter}`,
-        layerId: s.activeLayerId,
-        cellKeys: new Set(s.selection),
-      };
-    }),
+    groupSelection: () => {
+      const state = get();
+      if (!state.selection || state.selection.size === 0) return;
+      get().snapshot();
+      set(s => {
+        const id = `group-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        s.groupCounter += 1;
+        s.groups[id] = {
+          id,
+          name: `Group ${s.groupCounter}`,
+          layerId: s.activeLayerId,
+          cellKeys: new Set(s.selection!),
+          locked: false,
+        };
+      });
+    },
 
-    ungroupSelection: () => set(s => {
-      if (!s.selection || s.selection.size === 0) return;
-      const toDelete: string[] = [];
-      for (const [id, group] of Object.entries(s.groups)) {
-        if (group.layerId !== s.activeLayerId) continue;
-        for (const key of s.selection!) {
-          if (group.cellKeys.has(key)) { toDelete.push(id); break; }
+    ungroupSelection: () => {
+      const state = get();
+      if (!state.selection || state.selection.size === 0) return;
+      get().snapshot();
+      set(s => {
+        const toDelete: string[] = [];
+        for (const [id, group] of Object.entries(s.groups)) {
+          if (group.layerId !== s.activeLayerId) continue;
+          const overlap = [...s.selection!].filter(k => group.cellKeys.has(k));
+          if (overlap.length === 0) continue;
+          if (overlap.length >= group.cellKeys.size) {
+            // All cells selected → fully ungroup
+            toDelete.push(id);
+          } else {
+            // Partial → remove selected cells from group
+            for (const k of overlap) group.cellKeys.delete(k);
+          }
         }
-      }
-      for (const id of toDelete) delete s.groups[id];
-    }),
+        for (const id of toDelete) delete s.groups[id];
+      });
+    },
 
     findGroupForCell: (cellKey) => {
       const s = get();
@@ -621,6 +720,75 @@ export const useCanvasStore = create<CanvasState>()(
         if (group.layerId === s.activeLayerId && group.cellKeys.has(cellKey)) return id;
       }
       return null;
+    },
+
+    toggleGroupLock: (groupId) => set(s => {
+      const group = s.groups[groupId];
+      if (group) group.locked = !group.locked;
+    }),
+
+    renameGroup: (groupId, name) => set(s => {
+      const group = s.groups[groupId];
+      if (group) group.name = name;
+    }),
+
+    setGroupTextMeta: (groupId, meta) => set(s => {
+      const group = s.groups[groupId];
+      if (group) group.textMeta = meta;
+    }),
+
+    replaceGroupCells: (groupId, newCells, newWidth, newHeight) => {
+      const state = get();
+      const group = state.groups[groupId];
+      if (!group) return;
+      get().snapshot();
+      set(s => {
+        const layer = s.layers.find(l => l.id === s.activeLayerId);
+        if (!layer) return;
+        const g = s.groups[groupId];
+        if (!g) return;
+
+        // Find the top-left of the old group to anchor replacement
+        let minRow = Infinity, minCol = Infinity;
+        for (const k of g.cellKeys) {
+          const [r, c] = k.split(',').map(Number);
+          if (r < minRow) minRow = r;
+          if (c < minCol) minCol = c;
+        }
+
+        // Remove old cells
+        for (const k of g.cellKeys) {
+          delete layer.cells[k];
+        }
+
+        // Place new cells at the same anchor
+        const newKeys = new Set<string>();
+        for (const [key, cell] of Object.entries(newCells)) {
+          const [r, c] = key.split(',').map(Number);
+          const destR = minRow + r;
+          const destC = minCol + c;
+          if (destR >= 0 && destR < s.config.height && destC >= 0 && destC < s.config.width) {
+            const destKey = `${destR},${destC}`;
+            layer.cells[destKey] = { ...cell };
+            newKeys.add(destKey);
+          }
+        }
+
+        // Update group cell keys
+        g.cellKeys = newKeys;
+
+        // Update selection to match new cells
+        s.selection = newKeys.size > 0 ? newKeys : null;
+        if (newKeys.size > 0) {
+          let sMinR = Infinity, sMinC = Infinity, sMaxR = -Infinity, sMaxC = -Infinity;
+          for (const k of newKeys) {
+            const [r, c] = k.split(',').map(Number);
+            if (r < sMinR) sMinR = r; if (r > sMaxR) sMaxR = r;
+            if (c < sMinC) sMinC = c; if (c > sMaxC) sMaxC = c;
+          }
+          s.selectionBounds = { minRow: sMinR, minCol: sMinC, maxRow: sMaxR, maxCol: sMaxC };
+        }
+      });
     },
   }))
 );

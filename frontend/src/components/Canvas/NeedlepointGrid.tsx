@@ -588,17 +588,39 @@ export function NeedlepointGrid() {
   const showSymbols = viewMode === 'symbol' || viewMode === 'combined';
   const showColors = viewMode === 'color' || viewMode === 'combined';
 
-  // Compute grouped cell keys for visual indicator
-  const groupedCellKeys = useMemo(() => {
+  // Compute group boundary lines for visual outlines
+  const GROUP_OUTLINE_COLORS = ['#f59e0b', '#06b6d4', '#84cc16', '#ec4899', '#8b5cf6', '#f97316'];
+  const groupBoundaryLines = useMemo(() => {
     const activeLayerId = useCanvasStore.getState().activeLayerId;
-    const keys = new Set<string>();
-    for (const group of Object.values(groups)) {
-      if (group.layerId === activeLayerId) {
-        for (const k of group.cellKeys) keys.add(k);
+    const lines: { points: number[]; color: string; locked: boolean }[] = [];
+    const groupList = Object.values(groups).filter(g => g.layerId === activeLayerId);
+    groupList.forEach((group, idx) => {
+      const color = GROUP_OUTLINE_COLORS[idx % GROUP_OUTLINE_COLORS.length];
+      const inset = 1;
+      for (const cellKey of group.cellKeys) {
+        const [r, c] = cellKey.split(',').map(Number);
+        const x = c * cellSize;
+        const y = r * cellSize;
+        // Top edge
+        if (!group.cellKeys.has(`${r - 1},${c}`)) {
+          lines.push({ points: [x + inset, y + inset, x + cellSize - inset, y + inset], color, locked: group.locked });
+        }
+        // Bottom edge
+        if (!group.cellKeys.has(`${r + 1},${c}`)) {
+          lines.push({ points: [x + inset, y + cellSize - inset, x + cellSize - inset, y + cellSize - inset], color, locked: group.locked });
+        }
+        // Left edge
+        if (!group.cellKeys.has(`${r},${c - 1}`)) {
+          lines.push({ points: [x + inset, y + inset, x + inset, y + cellSize - inset], color, locked: group.locked });
+        }
+        // Right edge
+        if (!group.cellKeys.has(`${r},${c + 1}`)) {
+          lines.push({ points: [x + cellSize - inset, y + inset, x + cellSize - inset, y + cellSize - inset], color, locked: group.locked });
+        }
       }
-    }
-    return keys;
-  }, [groups]);
+    });
+    return lines;
+  }, [groups, cellSize]);
 
   // Grid lines
   const gridLines: React.JSX.Element[] = [];
@@ -711,21 +733,37 @@ export function NeedlepointGrid() {
                     listening={false}
                   />
                 )}
-                {/* Group indicator: tiny amber dot */}
-                {groupedCellKeys.has(`${row},${col}`) && (
-                  <Rect
-                    x={x + w - 3}
-                    y={y}
-                    width={4}
-                    height={4}
-                    fill="#f59e0b"
-                    listening={false}
-                  />
-                )}
+                {/* Lock indicator: tiny icon in corner */}
+                {(() => {
+                  const ck = `${row},${col}`;
+                  for (const g of Object.values(groups)) {
+                    if (g.locked && g.layerId === useCanvasStore.getState().activeLayerId && g.cellKeys.has(ck)) {
+                      return <Rect x={x + w - 3} y={y} width={4} height={4} fill="#ef4444" listening={false} />;
+                    }
+                  }
+                  return null;
+                })()}
               </Group>
             );
           })}
         </Layer>
+
+        {/* Group boundary outlines */}
+        {groupBoundaryLines.length > 0 && (
+          <Layer listening={false}>
+            {groupBoundaryLines.map((line, i) => (
+              <Line
+                key={`gb-${i}`}
+                points={line.points}
+                stroke={line.color}
+                strokeWidth={2}
+                dash={line.locked ? [4, 2] : undefined}
+                opacity={0.8}
+                listening={false}
+              />
+            ))}
+          </Layer>
+        )}
 
         {/* Stitch type overlays */}
         {showStitchOverlays && (

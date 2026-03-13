@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { findNearestDmcColor } from '../../data/dmcColors';
-import type { StitchCell } from '../../types';
+import type { StitchCell, TextMeta } from '../../types';
 import './LettersTab.css';
 
 const UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -29,13 +29,6 @@ function loadGoogleFonts() {
   link.href = `https://fonts.googleapis.com/css2?family=${families}&display=swap`;
   document.head.appendChild(link);
 }
-
-const SIZE_PRESETS = [
-  { label: 'Small', value: 15 },
-  { label: 'Medium', value: 25 },
-  { label: 'Large', value: 40 },
-  { label: 'Custom', value: 0 },
-] as const;
 
 const FONTS = [
   // Sans-serif
@@ -136,28 +129,215 @@ function rasterizeText(
   return { cells, width, height };
 }
 
+function extractCells(
+  ctx: CanvasRenderingContext2D,
+  canvasW: number,
+  canvasH: number,
+  hexColor: string,
+  dmcNumber: string | null,
+): RasterResult {
+  const imageData = ctx.getImageData(0, 0, canvasW, canvasH);
+  const { data } = imageData;
+
+  let minRow = canvasH, maxRow = 0, minCol = canvasW, maxCol = 0;
+  for (let row = 0; row < canvasH; row++) {
+    for (let col = 0; col < canvasW; col++) {
+      const alpha = data[(row * canvasW + col) * 4 + 3];
+      if (alpha > 128) {
+        if (row < minRow) minRow = row;
+        if (row > maxRow) maxRow = row;
+        if (col < minCol) minCol = col;
+        if (col > maxCol) maxCol = col;
+      }
+    }
+  }
+
+  if (minRow > maxRow) return { cells: {}, width: 1, height: 1 };
+
+  const width = maxCol - minCol + 1;
+  const height = maxRow - minRow + 1;
+  const cells: Record<string, StitchCell> = {};
+
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
+      const alpha = data[(row * canvasW + col) * 4 + 3];
+      if (alpha > 128) {
+        cells[`${row - minRow},${col - minCol}`] = {
+          color: hexColor,
+          dmcNumber,
+          stitchType: 'tent',
+        };
+      }
+    }
+  }
+
+  return { cells, width, height };
+}
+
+function rasterizeCurvedText(
+  text: string,
+  fontFamily: string,
+  sizePx: number,
+  hexColor: string,
+  dmcNumber: string | null,
+  curveAmount: number,
+): RasterResult {
+  if (!text) return { cells: {}, width: 1, height: 1 };
+  if (curveAmount === 0) return rasterizeText(text, fontFamily, sizePx, hexColor, dmcNumber);
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+  ctx.font = `bold ${sizePx}px ${fontFamily}`;
+
+  // Measure each character
+  const chars = text.split('');
+  const charWidths = chars.map(ch => ctx.measureText(ch).width);
+  const totalWidth = charWidths.reduce((a, b) => a + b, 0);
+
+  if (totalWidth === 0) return { cells: {}, width: 1, height: 1 };
+
+  // Arc parameters: curveAmount ±100 maps to ±π (±180°)
+  const arcAngle = (curveAmount / 100) * Math.PI;
+  const radius = totalWidth / Math.abs(arcAngle);
+
+  // Canvas size — generous to contain the arc
+  const dim = Math.ceil((radius + sizePx) * 2 + sizePx * 2);
+  canvas.width = dim;
+  canvas.height = dim;
+  const cx = dim / 2;
+  const cy = curveAmount > 0 ? dim / 2 + radius : dim / 2 - radius;
+
+  // Draw each character along the arc
+  ctx.fillStyle = hexColor;
+  ctx.font = `bold ${sizePx}px ${fontFamily}`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+
+  let accumulated = -totalWidth / 2;
+  for (let i = 0; i < chars.length; i++) {
+    const halfW = charWidths[i] / 2;
+    accumulated += halfW;
+    const charAngle = (accumulated / totalWidth) * arcAngle;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (curveAmount > 0) {
+      const angle = -Math.PI / 2 + charAngle;
+      ctx.rotate(angle);
+      ctx.translate(0, -radius);
+    } else {
+      const angle = Math.PI / 2 + charAngle;
+      ctx.rotate(angle);
+      ctx.translate(0, radius);
+      ctx.rotate(Math.PI);
+    }
+    ctx.fillText(chars[i], 0, 0);
+    ctx.restore();
+
+    accumulated += halfW;
+  }
+
+  return extractCells(ctx, dim, dim, hexColor, dmcNumber);
+}
+
+function rotateCells(
+  result: RasterResult,
+  rotation: 0 | 90 | 180 | 270,
+): RasterResult {
+  if (rotation === 0) return result;
+
+  const { cells, width, height } = result;
+  const rotated: Record<string, StitchCell> = {};
+  let newW = width;
+  let newH = height;
+
+  for (const [key, cell] of Object.entries(cells)) {
+    const [r, c] = key.split(',').map(Number);
+    let nr: number, nc: number;
+
+    if (rotation === 90) {
+      nr = c;
+      nc = height - 1 - r;
+      newW = height;
+      newH = width;
+    } else if (rotation === 180) {
+      nr = height - 1 - r;
+      nc = width - 1 - c;
+    } else {
+      // 270
+      nr = width - 1 - c;
+      nc = r;
+      newW = height;
+      newH = width;
+    }
+
+    rotated[`${nr},${nc}`] = cell;
+  }
+
+  return { cells: rotated, width: newW, height: newH };
+}
+
 export function LettersTab() {
   const activeColor = useCanvasStore(s => s.activeColor);
   const activeDmcNumber = useCanvasStore(s => s.activeDmcNumber);
+  const selection = useCanvasStore(s => s.selection);
+  const groups = useCanvasStore(s => s.groups);
+  const activeLayerId = useCanvasStore(s => s.activeLayerId);
 
   const [mode, setMode] = useState<'letter' | 'phrase'>('letter');
   const [letterCase, setLetterCase] = useState<'upper' | 'lower'>('upper');
   const [selectedLetter, setSelectedLetter] = useState('A');
   const [phrase, setPhrase] = useState('');
-  const [sizePreset, setSizePreset] = useState('Medium');
-  const [customSize, setCustomSize] = useState(25);
+  const [textSize, setTextSize] = useState(25);
+  const [curve, setCurve] = useState(0);
+  const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(0);
   const [fontIdx, setFontIdx] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
 
   const previewRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => { loadGoogleFonts(); }, []);
 
-  const letters = letterCase === 'upper' ? UPPER : LOWER;
+  // Detect when a text group is selected
+  const selectedTextGroup = useMemo(() => {
+    if (!selection || selection.size === 0) return null;
+    for (const [id, group] of Object.entries(groups)) {
+      if (group.layerId !== activeLayerId || !group.textMeta) continue;
+      // Check if the selection matches this group's cells
+      const groupKeys = group.cellKeys;
+      if (groupKeys.size === 0) continue;
+      const allGroupInSelection = [...groupKeys].every(k => selection.has(k));
+      const allSelectionInGroup = [...selection].every(k => groupKeys.has(k));
+      if (allGroupInSelection && allSelectionInGroup) return { id, ...group };
+    }
+    return null;
+  }, [selection, groups, activeLayerId]);
 
-  const effectiveSize = sizePreset === 'Custom'
-    ? Math.max(5, Math.min(100, customSize))
-    : SIZE_PRESETS.find(p => p.label === sizePreset)!.value;
+  // Load text metadata when a text group is selected
+  useEffect(() => {
+    if (selectedTextGroup && selectedTextGroup.textMeta && editingGroupId !== selectedTextGroup.id) {
+      const meta = selectedTextGroup.textMeta;
+      setEditingGroupId(selectedTextGroup.id);
+      if (meta.text.length === 1) {
+        setMode('letter');
+        const isUpper = meta.text === meta.text.toUpperCase();
+        setLetterCase(isUpper ? 'upper' : 'lower');
+        setSelectedLetter(meta.text);
+      } else {
+        setMode('phrase');
+        setPhrase(meta.text);
+      }
+      setTextSize(meta.sizePx);
+      setCurve(meta.curve);
+      setRotation(meta.rotation);
+      setFontIdx(meta.fontIdx);
+    } else if (!selectedTextGroup && editingGroupId) {
+      setEditingGroupId(null);
+    }
+  }, [selectedTextGroup, editingGroupId]);
+
+  const letters = letterCase === 'upper' ? UPPER : LOWER;
 
   const font = FONTS[fontIdx];
   const displayText = mode === 'letter' ? selectedLetter : phrase;
@@ -179,7 +359,8 @@ export function LettersTab() {
     const ctx = canvas.getContext('2d')!;
 
     // Rasterize at actual size to get pixel grid
-    const result = rasterizeText(displayText, font.family, effectiveSize, activeColor, activeDmcNumber);
+    const raw = rasterizeCurvedText(displayText, font.family, textSize, activeColor, activeDmcNumber, curve);
+    const result = rotateCells(raw, rotation);
 
     // Draw preview: each cell = a small square
     const maxDim = Math.max(result.width, result.height, 1);
@@ -217,7 +398,7 @@ export function LettersTab() {
         ctx.stroke();
       }
     }
-  }, [displayText, font.family, effectiveSize, activeColor, activeDmcNumber]);
+  }, [displayText, font.family, textSize, curve, rotation, activeColor, activeDmcNumber]);
 
   useEffect(() => {
     drawPreview();
@@ -229,8 +410,20 @@ export function LettersTab() {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  const buildTextMeta = (): TextMeta => ({
+    text: displayText,
+    fontFamily: font.family,
+    fontIdx,
+    sizePx: textSize,
+    curve,
+    rotation,
+    hexColor: activeColor,
+    dmcNumber: activeDmcNumber,
+  });
+
   const handleAddToCanvas = () => {
-    const result = rasterizeText(displayText, font.family, effectiveSize, activeColor, activeDmcNumber);
+    const raw = rasterizeCurvedText(displayText, font.family, textSize, activeColor, activeDmcNumber, curve);
+    const result = rotateCells(raw, rotation);
     if (Object.keys(result.cells).length === 0) {
       setToast('No pixels to add');
       return;
@@ -250,10 +443,32 @@ export function LettersTab() {
     // Group so it always moves as a unit
     store.groupSelection();
 
+    // Attach text metadata to the newly created group
+    const storeAfter = useCanvasStore.getState();
+    const groupIds = Object.keys(storeAfter.groups);
+    if (groupIds.length > 0) {
+      const latestGroupId = groupIds[groupIds.length - 1];
+      storeAfter.setGroupTextMeta(latestGroupId, buildTextMeta());
+    }
+
     // Switch to select tool so user can immediately drag
     useCanvasStore.setState({ activeTool: 'select' });
 
     setToast('Letter placed — drag to reposition');
+  };
+
+  const handleUpdateText = () => {
+    if (!editingGroupId) return;
+    const raw = rasterizeCurvedText(displayText, font.family, textSize, activeColor, activeDmcNumber, curve);
+    const result = rotateCells(raw, rotation);
+    if (Object.keys(result.cells).length === 0) {
+      setToast('No pixels to update');
+      return;
+    }
+    const store = useCanvasStore.getState();
+    store.replaceGroupCells(editingGroupId, result.cells, result.width, result.height);
+    store.setGroupTextMeta(editingGroupId, buildTextMeta());
+    setToast('Text updated');
   };
 
   const handleCaseToggle = (newCase: 'upper' | 'lower') => {
@@ -269,6 +484,9 @@ export function LettersTab() {
 
   return (
     <div className="letters-tab">
+      {editingGroupId && (
+        <div className="letters-editing-banner">Editing placed text</div>
+      )}
       {/* Mode toggle */}
       <div className="letters-case-toggle">
         <button
@@ -333,35 +551,43 @@ export function LettersTab() {
       <div className="letters-controls">
         <div className="letters-row">
           <label>Size</label>
-          <select
-            value={sizePreset}
-            onChange={e => {
-              setSizePreset(e.target.value);
-              const preset = SIZE_PRESETS.find(p => p.label === e.target.value);
-              if (preset && preset.value > 0) setCustomSize(preset.value);
-            }}
-            className="letters-select"
-          >
-            {SIZE_PRESETS.map(p => (
-              <option key={p.label} value={p.label}>
-                {p.label}{p.value > 0 ? ` (${p.value})` : ''}
-              </option>
-            ))}
-          </select>
+          <input
+            type="range"
+            min={5}
+            max={80}
+            value={textSize}
+            onChange={e => setTextSize(Number(e.target.value))}
+            className="letters-slider"
+          />
+          <span className="letters-size-value">{textSize}</span>
         </div>
-        {sizePreset === 'Custom' && (
-          <div className="letters-row">
-            <label>Stitches</label>
-            <input
-              type="number"
-              min={5}
-              max={100}
-              value={customSize}
-              onChange={e => setCustomSize(Number(e.target.value))}
-              className="letters-number-input"
-            />
+        <div className="letters-row">
+          <label>Curve</label>
+          <input
+            type="range"
+            min={-100}
+            max={100}
+            value={curve}
+            onChange={e => setCurve(Number(e.target.value))}
+            className="letters-slider"
+          />
+          <span className="letters-size-value">{curve}</span>
+        </div>
+        <div className="letters-row">
+          <label>Orient</label>
+          <div className="letters-orient-group">
+            {([0, 90, 180, 270] as const).map(deg => (
+              <button
+                key={deg}
+                className={`letters-orient-btn ${rotation === deg ? 'active' : ''}`}
+                onClick={() => setRotation(deg)}
+                title={`${deg}°`}
+              >
+                <span className="letters-orient-arrow" style={{ transform: `rotate(${deg}deg)` }}>&#8593;</span>
+              </button>
+            ))}
           </div>
-        )}
+        </div>
         <div className="letters-row">
           <label>Font</label>
           <select
@@ -393,14 +619,32 @@ export function LettersTab() {
         <canvas ref={previewRef} className="letters-preview-canvas" />
       </div>
 
-      {/* Add button */}
-      <button
-        className="letters-add-btn"
-        onClick={handleAddToCanvas}
-        disabled={mode === 'phrase' && !phrase.trim()}
-      >
-        Add to Canvas
-      </button>
+      {/* Action buttons */}
+      {editingGroupId ? (
+        <div className="letters-edit-actions">
+          <button
+            className="letters-add-btn letters-update-btn"
+            onClick={handleUpdateText}
+            disabled={mode === 'phrase' && !phrase.trim()}
+          >
+            Update Text
+          </button>
+          <button
+            className="letters-add-btn letters-cancel-btn"
+            onClick={() => setEditingGroupId(null)}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          className="letters-add-btn"
+          onClick={handleAddToCanvas}
+          disabled={mode === 'phrase' && !phrase.trim()}
+        >
+          Add to Canvas
+        </button>
+      )}
 
       {toast && <div className="letters-toast">{toast}</div>}
     </div>

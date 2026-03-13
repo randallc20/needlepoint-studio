@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useCanvasStore } from '../../store/canvasStore';
 import './LayerPanel.css';
+
+const GROUP_OUTLINE_COLORS = ['#f59e0b', '#06b6d4', '#84cc16', '#ec4899', '#8b5cf6', '#f97316'];
 
 export function LayerPanel() {
   const layers = useCanvasStore(s => s.layers);
@@ -11,9 +13,16 @@ export function LayerPanel() {
   const toggleLayerVisibility = useCanvasStore(s => s.toggleLayerVisibility);
   const renameLayer = useCanvasStore(s => s.renameLayer);
   const mergeLayers = useCanvasStore(s => s.mergeLayers);
+  const groups = useCanvasStore(s => s.groups);
+  const toggleGroupLock = useCanvasStore(s => s.toggleGroupLock);
+  const renameGroup = useCanvasStore(s => s.renameGroup);
+  const setSelection = useCanvasStore(s => s.setSelection);
+  const ungroupSelection = useCanvasStore(s => s.ungroupSelection);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editGroupName, setEditGroupName] = useState('');
   const [collapsed, setCollapsed] = useState(false);
 
   const startEdit = (id: string, name: string) => {
@@ -28,8 +37,42 @@ export function LayerPanel() {
     setEditingId(null);
   };
 
+  const startGroupEdit = (id: string, name: string) => {
+    setEditingGroupId(id);
+    setEditGroupName(name);
+  };
+
+  const finishGroupEdit = () => {
+    if (editingGroupId && editGroupName.trim()) {
+      renameGroup(editingGroupId, editGroupName.trim());
+    }
+    setEditingGroupId(null);
+  };
+
   // Show layers in reverse order (top layer first visually)
   const reversedLayers = [...layers].reverse();
+
+  // Groups on active layer
+  const activeGroups = useMemo(() => {
+    return Object.values(groups).filter(g => g.layerId === activeLayerId);
+  }, [groups, activeLayerId]);
+
+  const handleGroupClick = (groupId: string) => {
+    const group = groups[groupId];
+    if (group) {
+      setSelection(new Set(group.cellKeys));
+    }
+  };
+
+  const handleDeleteGroup = (e: React.MouseEvent, groupId: string) => {
+    e.stopPropagation();
+    const group = groups[groupId];
+    if (group) {
+      // Select the group's cells then ungroup
+      setSelection(new Set(group.cellKeys));
+      ungroupSelection();
+    }
+  };
 
   if (collapsed) {
     return (
@@ -108,6 +151,65 @@ export function LayerPanel() {
             </div>
           );
         })}
+      </div>
+
+      {/* Groups section */}
+      <div className="groups-section">
+        <div className="groups-header">
+          <span className="groups-title">Groups ({activeGroups.length})</span>
+        </div>
+        {activeGroups.length === 0 ? (
+          <div className="groups-empty">No groups on this layer</div>
+        ) : (
+          <div className="groups-list">
+            {activeGroups.map((group, idx) => (
+              <div
+                key={group.id}
+                className="group-item"
+                onClick={() => handleGroupClick(group.id)}
+                title={`${group.name} — ${group.cellKeys.size} cells — click to select`}
+              >
+                <div
+                  className="group-color-dot"
+                  style={{ background: GROUP_OUTLINE_COLORS[idx % GROUP_OUTLINE_COLORS.length] }}
+                />
+                {editingGroupId === group.id ? (
+                  <input
+                    className="group-name-input"
+                    value={editGroupName}
+                    onChange={e => setEditGroupName(e.target.value)}
+                    onBlur={finishGroupEdit}
+                    onKeyDown={e => { if (e.key === 'Enter') finishGroupEdit(); if (e.key === 'Escape') setEditingGroupId(null); }}
+                    autoFocus
+                    onClick={e => e.stopPropagation()}
+                  />
+                ) : (
+                  <span
+                    className="group-name"
+                    onDoubleClick={e => { e.stopPropagation(); startGroupEdit(group.id, group.name); }}
+                  >
+                    {group.name}
+                  </span>
+                )}
+                <span className="group-count">{group.cellKeys.size}</span>
+                <button
+                  className="group-lock-btn"
+                  onClick={e => { e.stopPropagation(); toggleGroupLock(group.id); }}
+                  title={group.locked ? 'Unlock group' : 'Lock group'}
+                >
+                  {group.locked ? '🔒' : '🔓'}
+                </button>
+                <button
+                  className="group-delete-btn"
+                  onClick={e => handleDeleteGroup(e, group.id)}
+                  title="Ungroup"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
