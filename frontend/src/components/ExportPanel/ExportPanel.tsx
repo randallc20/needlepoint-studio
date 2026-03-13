@@ -135,7 +135,7 @@ export function ExportPanel() {
         </div>
         <div className="print-info-row">
           <span className="print-info-label">Design:</span>
-          <span className="print-info-value">{config.width} × {config.height} stitches</span>
+          <span className="print-info-value">{config.width} × {config.height} stitches ({(config.width / config.meshCount).toFixed(1)}" × {(config.height / config.meshCount).toFixed(1)}")</span>
         </div>
 
         {/* Scale factor */}

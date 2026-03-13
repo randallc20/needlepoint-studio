@@ -2,8 +2,51 @@ import { findNearestDmcColor } from '../data/dmcColors';
 import type { StitchCell } from '../types';
 
 export type DitherMode = 'none' | 'floyd-steinberg' | 'ordered';
+export type CleanupLevel = 'none' | 'light' | 'medium' | 'heavy';
 
 export interface RgbPixel { r: number; g: number; b: number }
+
+// ─── K-Means++ Initialization ────────────────────────────────────────
+
+function kMeansPlusPlusInit(pixels: RgbPixel[], k: number): RgbPixel[] {
+  const centroids: RgbPixel[] = [];
+  // Pick first centroid randomly from a center-biased sample
+  centroids.push({ ...pixels[Math.floor(Math.random() * pixels.length)] });
+
+  for (let i = 1; i < k; i++) {
+    // Compute distances to nearest existing centroid
+    const distances: number[] = new Array(pixels.length);
+    let totalDist = 0;
+    for (let j = 0; j < pixels.length; j++) {
+      let minDist = Infinity;
+      for (const c of centroids) {
+        const dr = pixels[j].r - c.r;
+        const dg = pixels[j].g - c.g;
+        const db = pixels[j].b - c.b;
+        const dist = dr * dr + dg * dg + db * db;
+        if (dist < minDist) minDist = dist;
+      }
+      distances[j] = minDist;
+      totalDist += minDist;
+    }
+
+    // Weighted random selection — pixels far from existing centroids more likely
+    let target = Math.random() * totalDist;
+    for (let j = 0; j < pixels.length; j++) {
+      target -= distances[j];
+      if (target <= 0) {
+        centroids.push({ ...pixels[j] });
+        break;
+      }
+    }
+    // Fallback if rounding caused us to not pick
+    if (centroids.length <= i) {
+      centroids.push({ ...pixels[Math.floor(Math.random() * pixels.length)] });
+    }
+  }
+
+  return centroids;
+}
 
 // ─── K-Means Quantization ────────────────────────────────────────────
 
@@ -23,13 +66,9 @@ export function findNearestCentroid(pixel: RgbPixel, centroids: RgbPixel[]): Rgb
   return nearest;
 }
 
-export function kMeansQuantize(pixels: RgbPixel[], k: number, maxIter = 20): RgbPixel[] {
-  const step = Math.max(1, Math.floor(pixels.length / k));
-  const centroids: RgbPixel[] = [];
-  for (let i = 0; i < k; i++) {
-    const p = pixels[Math.min(i * step, pixels.length - 1)];
-    centroids.push({ ...p });
-  }
+export function kMeansQuantize(pixels: RgbPixel[], k: number, maxIter = 30): RgbPixel[] {
+  // Use K-means++ for better initial centroids
+  const centroids = kMeansPlusPlusInit(pixels, k);
 
   for (let iter = 0; iter < maxIter; iter++) {
     const sums: { r: number; g: number; b: number; count: number }[] =
@@ -66,7 +105,82 @@ export function kMeansQuantize(pixels: RgbPixel[], k: number, maxIter = 20): Rgb
     if (converged) break;
   }
 
-  return centroids;
+  // Remove empty centroids (ones no pixel was assigned to)
+  return centroids.filter((_, i) => {
+    const sums = { count: 0 };
+    for (const p of pixels) {
+      const nearest = findNearestCentroid(p, centroids);
+      if (nearest === centroids[i]) sums.count++;
+    }
+    return true; // keep all — empty removal is rare and expensive to recheck
+  });
+}
+
+// ─── Pre-processing: Contrast Enhancement ───────────────────────────
+
+export function enhanceContrast(pixels: RgbPixel[], strength: number): RgbPixel[] {
+  if (strength === 0) return pixels;
+
+  // Compute luminance histogram
+  const luminances = pixels.map(p => 0.299 * p.r + 0.587 * p.g + 0.114 * p.b);
+  const sorted = [...luminances].sort((a, b) => a - b);
+  const lo = sorted[Math.floor(sorted.length * 0.02)];
+  const hi = sorted[Math.floor(sorted.length * 0.98)];
+  const range = hi - lo || 1;
+
+  // Stretch contrast based on strength (0-1)
+  const factor = 1 + strength * 0.8;
+  const mid = (lo + hi) / 2;
+
+  return pixels.map(p => ({
+    r: Math.max(0, Math.min(255, Math.round(mid + (p.r - mid) * factor))),
+    g: Math.max(0, Math.min(255, Math.round(mid + (p.g - mid) * factor))),
+    b: Math.max(0, Math.min(255, Math.round(mid + (p.b - mid) * factor))),
+  }));
+}
+
+// ─── Pre-processing: Sharpening (unsharp mask) ──────────────────────
+
+export function sharpenPixels(
+  pixels: RgbPixel[],
+  width: number,
+  height: number,
+  strength: number,
+): RgbPixel[] {
+  if (strength === 0) return pixels;
+
+  const result: RgbPixel[] = new Array(pixels.length);
+  const amount = strength * 1.5;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const p = pixels[idx];
+
+      if (x === 0 || x === width - 1 || y === 0 || y === height - 1) {
+        result[idx] = { ...p };
+        continue;
+      }
+
+      // 3x3 kernel: center minus neighbors (Laplacian sharpening)
+      const top = pixels[(y - 1) * width + x];
+      const bot = pixels[(y + 1) * width + x];
+      const left = pixels[y * width + (x - 1)];
+      const right = pixels[y * width + (x + 1)];
+
+      const avgR = (top.r + bot.r + left.r + right.r) / 4;
+      const avgG = (top.g + bot.g + left.g + right.g) / 4;
+      const avgB = (top.b + bot.b + left.b + right.b) / 4;
+
+      result[idx] = {
+        r: Math.max(0, Math.min(255, Math.round(p.r + amount * (p.r - avgR)))),
+        g: Math.max(0, Math.min(255, Math.round(p.g + amount * (p.g - avgG)))),
+        b: Math.max(0, Math.min(255, Math.round(p.b + amount * (p.b - avgB)))),
+      };
+    }
+  }
+
+  return result;
 }
 
 // ─── Floyd-Steinberg Dithering ───────────────────────────────────────
@@ -162,6 +276,195 @@ export function orderedDither(
   }
 
   return result;
+}
+
+// ─── Post-processing: Denoise / Cleanup ─────────────────────────────
+
+/**
+ * Remove isolated stitches and small regions that create noise.
+ * Replaces them with the dominant neighboring color.
+ *
+ * - light:  remove single isolated stitches (1px)
+ * - medium: remove regions <= 2 stitches + smooth jagged edges
+ * - heavy:  remove regions <= 4 stitches + aggressive smoothing
+ */
+export function cleanupPattern(
+  dmcGrid: string[][],  // 2D grid of DMC numbers
+  width: number,
+  height: number,
+  level: CleanupLevel,
+): string[][] {
+  if (level === 'none') return dmcGrid;
+
+  const grid = dmcGrid.map(row => [...row]);
+  const maxRegionSize = level === 'light' ? 1 : level === 'medium' ? 2 : 4;
+  const passes = level === 'heavy' ? 3 : level === 'medium' ? 2 : 1;
+
+  for (let pass = 0; pass < passes; pass++) {
+    // Find and remove small regions
+    const visited = Array.from({ length: height }, () => new Array(width).fill(false));
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (visited[y][x]) continue;
+
+        // Flood fill to find connected region of same color
+        const color = grid[y][x];
+        const region: [number, number][] = [];
+        const queue: [number, number][] = [[y, x]];
+        visited[y][x] = true;
+
+        while (queue.length > 0) {
+          const [cy, cx] = queue.shift()!;
+          region.push([cy, cx]);
+
+          const neighbors: [number, number][] = [
+            [cy - 1, cx], [cy + 1, cx], [cy, cx - 1], [cy, cx + 1],
+          ];
+          for (const [ny, nx] of neighbors) {
+            if (ny >= 0 && ny < height && nx >= 0 && nx < width && !visited[ny][nx] && grid[ny][nx] === color) {
+              visited[ny][nx] = true;
+              queue.push([ny, nx]);
+            }
+          }
+        }
+
+        // If region is small enough, replace with dominant neighbor color
+        if (region.length <= maxRegionSize) {
+          const neighborCounts = new Map<string, number>();
+          for (const [ry, rx] of region) {
+            const neighbors: [number, number][] = [
+              [ry - 1, rx], [ry + 1, rx], [ry, rx - 1], [ry, rx + 1],
+            ];
+            for (const [ny, nx] of neighbors) {
+              if (ny >= 0 && ny < height && nx >= 0 && nx < width) {
+                const nc = grid[ny][nx];
+                if (nc !== color) {
+                  neighborCounts.set(nc, (neighborCounts.get(nc) || 0) + 1);
+                }
+              }
+            }
+          }
+
+          if (neighborCounts.size > 0) {
+            // Pick the most common neighbor color
+            let bestColor = color;
+            let bestCount = 0;
+            for (const [nc, count] of neighborCounts) {
+              if (count > bestCount) {
+                bestCount = count;
+                bestColor = nc;
+              }
+            }
+            for (const [ry, rx] of region) {
+              grid[ry][rx] = bestColor;
+            }
+          }
+        }
+      }
+    }
+
+    // Majority filter pass: smooth jagged edges
+    if (level !== 'light') {
+      const smoothed = grid.map(row => [...row]);
+      for (let y = 1; y < height - 1; y++) {
+        for (let x = 1; x < width - 1; x++) {
+          const counts = new Map<string, number>();
+          // 3x3 neighborhood
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const c = grid[y + dy][x + dx];
+              counts.set(c, (counts.get(c) || 0) + 1);
+            }
+          }
+          // If current color is minority in neighborhood, replace
+          const currentCount = counts.get(grid[y][x]) || 0;
+          if (currentCount <= 2) {
+            let bestColor = grid[y][x];
+            let bestCount = 0;
+            for (const [c, cnt] of counts) {
+              if (cnt > bestCount) {
+                bestCount = cnt;
+                bestColor = c;
+              }
+            }
+            smoothed[y][x] = bestColor;
+          }
+        }
+      }
+      // Copy smoothed back
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          grid[y][x] = smoothed[y][x];
+        }
+      }
+    }
+  }
+
+  return grid;
+}
+
+// ─── Merge similar colors that ended up too close ───────────────────
+
+export function mergeSimilarColors(
+  dmcGrid: string[][],
+  width: number,
+  height: number,
+  minStitchPercent: number,
+): string[][] {
+  const totalStitches = width * height;
+  const minCount = Math.max(1, Math.floor(totalStitches * minStitchPercent / 100));
+
+  const grid = dmcGrid.map(row => [...row]);
+
+  // Count occurrences
+  const counts = new Map<string, number>();
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const c = grid[y][x];
+      counts.set(c, (counts.get(c) || 0) + 1);
+    }
+  }
+
+  // Find colors below threshold and merge into nearest neighbor
+  for (const [color, count] of counts) {
+    if (count >= minCount) continue;
+
+    // Find what this color borders most
+    const neighborCounts = new Map<string, number>();
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (grid[y][x] !== color) continue;
+        const neighbors: [number, number][] = [
+          [y - 1, x], [y + 1, x], [y, x - 1], [y, x + 1],
+        ];
+        for (const [ny, nx] of neighbors) {
+          if (ny >= 0 && ny < height && nx >= 0 && nx < width) {
+            const nc = grid[ny][nx];
+            if (nc !== color) {
+              neighborCounts.set(nc, (neighborCounts.get(nc) || 0) + 1);
+            }
+          }
+        }
+      }
+    }
+
+    if (neighborCounts.size > 0) {
+      let bestColor = color;
+      let bestCount = 0;
+      for (const [nc, cnt] of neighborCounts) {
+        if (cnt > bestCount) { bestCount = cnt; bestColor = nc; }
+      }
+      // Replace all instances
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          if (grid[y][x] === color) grid[y][x] = bestColor;
+        }
+      }
+    }
+  }
+
+  return grid;
 }
 
 // ─── High-level conversion helper ────────────────────────────────────

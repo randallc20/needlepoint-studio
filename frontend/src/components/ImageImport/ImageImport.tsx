@@ -7,8 +7,13 @@ import {
   findNearestCentroid,
   floydSteinbergDither,
   orderedDither,
+  enhanceContrast,
+  sharpenPixels,
+  cleanupPattern,
+  mergeSimilarColors,
   type RgbPixel,
   type DitherMode,
+  type CleanupLevel,
 } from '../../utils/imageConvert';
 import type { StitchCell, DmcColor } from '../../types';
 import './ImageImport.css';
@@ -20,8 +25,12 @@ interface ConvertSettings {
   ditherMode: DitherMode;
   lockAspect: boolean;
   restrictToPalette: boolean;
-  bgColor: string;        // hex color to fill behind transparent images
-  bgEnabled: boolean;     // whether to apply bgColor
+  bgColor: string;
+  bgEnabled: boolean;
+  contrast: number;       // 0-100
+  sharpness: number;      // 0-100
+  cleanup: CleanupLevel;
+  mergeSmallColors: boolean;
 }
 
 /** One unique color mapping produced during conversion */
@@ -56,12 +65,16 @@ export function ImageImport() {
   const [settings, setSettings] = useState<ConvertSettings>({
     targetWidth: config.width,
     targetHeight: config.height,
-    colorCount: 25,
-    ditherMode: 'floyd-steinberg',
+    colorCount: 12,
+    ditherMode: 'none',
     lockAspect: true,
     restrictToPalette: false,
     bgColor: '#ffffff',
     bgEnabled: true,
+    contrast: 30,
+    sharpness: 40,
+    cleanup: 'medium',
+    mergeSmallColors: true,
   });
   const [converting, setConverting] = useState(false);
   const [result, setResult] = useState<ConvertResult | null>(null);
@@ -157,7 +170,6 @@ export function ImageImport() {
       if (m.dmc.number === oldDmcNumber) {
         const alternatives = findNearestDmcColors(m.centroidR, m.centroidG, m.centroidB, 6)
           .filter(a => a.color.number !== newDmc.number);
-        // Recompute deltaE for the new DMC relative to the original centroid
         const newResult = findNearestDmcColor(m.centroidR, m.centroidG, m.centroidB, [newDmc.number]);
         return {
           ...m,
@@ -178,7 +190,7 @@ export function ImageImport() {
     });
   }, [result]);
 
-  // Client-side image conversion
+  // ─── Main conversion pipeline ──────────────────────────────────────
   const convertImage = useCallback(async () => {
     if (!imageUrl) return;
     setConverting(true);
@@ -198,7 +210,7 @@ export function ImageImport() {
       canvas.height = settings.targetHeight;
       const ctx = canvas.getContext('2d')!;
 
-      // Fill background color first (handles transparent images)
+      // Step 1: Fill background color (handles transparent images)
       if (settings.bgEnabled) {
         ctx.fillStyle = settings.bgColor;
         ctx.fillRect(0, 0, settings.targetWidth, settings.targetHeight);
@@ -209,15 +221,25 @@ export function ImageImport() {
       ctx.drawImage(img, 0, 0, settings.targetWidth, settings.targetHeight);
 
       const imageData = ctx.getImageData(0, 0, settings.targetWidth, settings.targetHeight);
-      const pixels: RgbPixel[] = [];
+      let pixels: RgbPixel[] = [];
       for (let i = 0; i < imageData.data.length; i += 4) {
         pixels.push({ r: imageData.data[i], g: imageData.data[i + 1], b: imageData.data[i + 2] });
       }
 
-      // K-means clustering
+      // Step 2: Pre-processing — contrast enhancement
+      if (settings.contrast > 0) {
+        pixels = enhanceContrast(pixels, settings.contrast / 100);
+      }
+
+      // Step 3: Pre-processing — sharpen edges
+      if (settings.sharpness > 0) {
+        pixels = sharpenPixels(pixels, settings.targetWidth, settings.targetHeight, settings.sharpness / 100);
+      }
+
+      // Step 4: K-means++ clustering
       const centroids = kMeansQuantize(pixels, settings.colorCount);
 
-      // Assign each pixel to nearest centroid using selected dithering method
+      // Step 5: Assign pixels using selected dithering
       let quantized: RgbPixel[];
       switch (settings.ditherMode) {
         case 'floyd-steinberg':
@@ -230,17 +252,17 @@ export function ImageImport() {
           quantized = pixels.map(p => findNearestCentroid(p, centroids));
       }
 
-      // Build palette restriction list
+      // Step 6: Map quantized colors to DMC
       const restrictTo = settings.restrictToPalette && palette.length > 0
         ? palette.map(c => c.number)
         : undefined;
 
-      // Map each quantized color to nearest DMC with Delta-E tracking
-      const cells: Record<string, StitchCell> = {};
-      // Track which centroid maps to which DMC
       const centroidToDmc = new Map<string, { dmc: DmcColor; deltaE: number; centroid: RgbPixel }>();
 
+      // Build DMC grid (2D array of DMC numbers for post-processing)
+      const dmcGrid: string[][] = [];
       for (let y = 0; y < settings.targetHeight; y++) {
+        const row: string[] = [];
         for (let x = 0; x < settings.targetWidth; x++) {
           const idx = y * settings.targetWidth + x;
           const qColor = quantized[idx];
@@ -251,10 +273,32 @@ export function ImageImport() {
             centroidToDmc.set(cKey, { dmc: match.color, deltaE: match.deltaE, centroid: qColor });
           }
 
-          const { dmc } = centroidToDmc.get(cKey)!;
+          row.push(centroidToDmc.get(cKey)!.dmc.number);
+        }
+        dmcGrid.push(row);
+      }
+
+      // Step 7: Post-processing — merge tiny color regions
+      let processedGrid = dmcGrid;
+      if (settings.mergeSmallColors) {
+        processedGrid = mergeSimilarColors(processedGrid, settings.targetWidth, settings.targetHeight, 0.5);
+      }
+
+      // Step 8: Post-processing — cleanup noise
+      processedGrid = cleanupPattern(processedGrid, settings.targetWidth, settings.targetHeight, settings.cleanup);
+
+      // Step 9: Build final cells from processed grid
+      const dmcLookup = new Map<string, DmcColor>();
+      for (const c of DMC_COLORS) dmcLookup.set(c.number, c);
+
+      const cells: Record<string, StitchCell> = {};
+      for (let y = 0; y < settings.targetHeight; y++) {
+        for (let x = 0; x < settings.targetWidth; x++) {
+          const dmcNum = processedGrid[y][x];
+          const dmc = dmcLookup.get(dmcNum);
           cells[`${y},${x}`] = {
-            color: dmc.hex,
-            dmcNumber: dmc.number,
+            color: dmc?.hex ?? '#000000',
+            dmcNumber: dmcNum,
             stitchType: 'tent',
           };
         }
@@ -270,6 +314,7 @@ export function ImageImport() {
       const seenDmc = new Set<string>();
       for (const [, { dmc, deltaE, centroid }] of centroidToDmc) {
         if (seenDmc.has(dmc.number)) continue;
+        if (!stitchCounts.has(dmc.number)) continue; // skip colors eliminated by cleanup
         seenDmc.add(dmc.number);
         const alts = findNearestDmcColors(centroid.r, centroid.g, centroid.b, 6)
           .filter(a => a.color.number !== dmc.number)
@@ -296,7 +341,7 @@ export function ImageImport() {
         for (let x = 0; x < settings.targetWidth; x++) {
           const cell = cells[`${y},${x}`];
           const pIdx = (y * settings.targetWidth + x) * 4;
-          const dmc = DMC_COLORS.find(c => c.number === cell.dmcNumber);
+          const dmc = dmcLookup.get(cell.dmcNumber!);
           if (dmc) {
             pData.data[pIdx] = dmc.r;
             pData.data[pIdx + 1] = dmc.g;
@@ -387,7 +432,7 @@ export function ImageImport() {
                   <div className="preview-box">
                     <div className="preview-label">Pattern Preview</div>
                     <img src={result.previewUrl} alt="Preview" className="preview-image pixelated" />
-                    <div className="preview-info">{result.width} x {result.height} stitches</div>
+                    <div className="preview-info">{result.width} x {result.height} stitches ({(result.width / config.meshCount).toFixed(1)}" x {(result.height / config.meshCount).toFixed(1)}" on {config.meshCount}-ct)</div>
                   </div>
                 </div>
 
@@ -441,6 +486,8 @@ export function ImageImport() {
                 </div>
 
                 <div className="import-settings">
+                  {/* ── Dimensions ── */}
+                  <div className="import-section-label">Dimensions</div>
                   <div className="import-row">
                     <label>Width (stitches)</label>
                     <input
@@ -448,6 +495,7 @@ export function ImageImport() {
                       value={settings.targetWidth}
                       onChange={e => handleWidthChange(Number(e.target.value))}
                     />
+                    <span className="import-inches">{(settings.targetWidth / config.meshCount).toFixed(1)}"</span>
                   </div>
                   <div className="import-row">
                     <label>Height (stitches)</label>
@@ -456,6 +504,7 @@ export function ImageImport() {
                       value={settings.targetHeight}
                       onChange={e => handleHeightChange(Number(e.target.value))}
                     />
+                    <span className="import-inches">{(settings.targetHeight / config.meshCount).toFixed(1)}"</span>
                   </div>
                   <div className="import-row">
                     <label>
@@ -467,13 +516,18 @@ export function ImageImport() {
                       Lock aspect ratio
                     </label>
                   </div>
+
+                  {/* ── Color Settings ── */}
+                  <div className="import-section-label">Colors</div>
                   <div className="import-row">
-                    <label>Colors (2-50)</label>
+                    <label>Color count</label>
                     <input
-                      type="number" min={2} max={50}
+                      type="range" min={2} max={40}
                       value={settings.colorCount}
                       onChange={e => setSettings(s => ({ ...s, colorCount: Number(e.target.value) }))}
+                      className="import-slider"
                     />
+                    <span className="import-slider-value">{settings.colorCount}</span>
                   </div>
                   <div className="import-row">
                     <label>Dithering</label>
@@ -482,11 +536,60 @@ export function ImageImport() {
                       onChange={e => setSettings(s => ({ ...s, ditherMode: e.target.value as DitherMode }))}
                       className="import-select"
                     >
-                      <option value="none">None (flat)</option>
-                      <option value="floyd-steinberg">Floyd-Steinberg</option>
-                      <option value="ordered">Ordered (Bayer 4x4)</option>
+                      <option value="none">None (crisp, best for needlepoint)</option>
+                      <option value="floyd-steinberg">Floyd-Steinberg (gradients)</option>
+                      <option value="ordered">Ordered (textured)</option>
                     </select>
                   </div>
+                  <div className="import-row">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={settings.mergeSmallColors}
+                        onChange={e => setSettings(s => ({ ...s, mergeSmallColors: e.target.checked }))}
+                      />
+                      Merge tiny color regions
+                    </label>
+                  </div>
+
+                  {/* ── Image Enhancement ── */}
+                  <div className="import-section-label">Enhancement</div>
+                  <div className="import-row">
+                    <label>Contrast</label>
+                    <input
+                      type="range" min={0} max={100}
+                      value={settings.contrast}
+                      onChange={e => setSettings(s => ({ ...s, contrast: Number(e.target.value) }))}
+                      className="import-slider"
+                    />
+                    <span className="import-slider-value">{settings.contrast}</span>
+                  </div>
+                  <div className="import-row">
+                    <label>Sharpness</label>
+                    <input
+                      type="range" min={0} max={100}
+                      value={settings.sharpness}
+                      onChange={e => setSettings(s => ({ ...s, sharpness: Number(e.target.value) }))}
+                      className="import-slider"
+                    />
+                    <span className="import-slider-value">{settings.sharpness}</span>
+                  </div>
+                  <div className="import-row">
+                    <label>Cleanup</label>
+                    <select
+                      value={settings.cleanup}
+                      onChange={e => setSettings(s => ({ ...s, cleanup: e.target.value as CleanupLevel }))}
+                      className="import-select"
+                    >
+                      <option value="none">None</option>
+                      <option value="light">Light (single stitch noise)</option>
+                      <option value="medium">Medium (smooth edges)</option>
+                      <option value="heavy">Heavy (bold regions)</option>
+                    </select>
+                  </div>
+
+                  {/* ── Background ── */}
+                  <div className="import-section-label">Background</div>
                   <div className="import-row">
                     <label>
                       <input
@@ -494,7 +597,7 @@ export function ImageImport() {
                         checked={settings.bgEnabled}
                         onChange={e => setSettings(s => ({ ...s, bgEnabled: e.target.checked }))}
                       />
-                      Background color (for transparent images)
+                      Fill background (for transparent images)
                     </label>
                   </div>
                   {settings.bgEnabled && (
@@ -519,6 +622,8 @@ export function ImageImport() {
                       </div>
                     </div>
                   )}
+
+                  {/* ── Palette restriction ── */}
                   <div className="import-row">
                     <label>
                       <input
@@ -632,4 +737,3 @@ function ColorMappingRow({
     </div>
   );
 }
-
